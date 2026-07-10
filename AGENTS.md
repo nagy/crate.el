@@ -141,3 +141,31 @@ against it in the `when-let*` binding, not in the body:
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | ansi-color | soft | used by `insert-crate-structure` for cargo-modules output |
+
+## TODO
+
+- **docs.rs fallback for missing documentation** — crates.io
+  automatically links to `https://docs.rs/{name}` when a crate
+  has no custom documentation URL.  Do the same: when the
+  `documentation` field is null, insert
+  `https://docs.rs/{crate-name}` as the documentation link.
+
+- **Batch package metadata** — `crate-structure` invokes
+  `cargo-modules` per-crate from a temp directory.  Potentially
+  slow for crates with large dependency trees.  Consider caching
+  or precomputing.
+
+- **Tests in checkPhase** — wire `crate-tests.el` into
+  `default.nix`'s checkPhase once the test file byte-compiles
+  without warnings.
+
+- **Tabulated list mode** — add a `crate-browse-crates` command
+  showing all crates in a sortable `tabulated-list-mode` table
+  (like nixos.el's `nixos-browse-options` / `nixos-browse-packages`).
+  Use the `nixos--define-browse-mode` macro pattern.
+
+- **Marginalia annotators** — register `crate` completion category
+  annotator showing description and version in `marginalia`.
+
+- **Embark integration** — add Embark export and action keymaps
+  for crate candidates.

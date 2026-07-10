@@ -89,14 +89,19 @@ Used to generate crate module structure trees via
 
 (defun crate-list-json ()
   "Load the crate JSON dump from `crate-data-path'.
-Returns a hash table keyed by crate name, or nil if the file is
-missing.  Results are memoized via `with-memoization'."
+Returns a hash table keyed by lowercase crate name, or nil if the
+file is missing.  Results are memoized via `with-memoization'."
   (with-memoization (gethash 'data crate--data-cache)
     (when (and crate-data-path (file-exists-p crate-data-path))
-      (with-temp-buffer
-        (insert-file-contents crate-data-path)
-        (goto-char (point-min))
-        (json-parse-buffer)))))
+      (let ((raw (with-temp-buffer
+                   (insert-file-contents crate-data-path)
+                   (goto-char (point-min))
+                   (json-parse-buffer)))
+            (table (make-hash-table :test 'equal)))
+        (maphash (lambda (key val)
+                   (puthash (downcase key) val table))
+                 raw)
+        table))))
 
 (defvar crate-structure--cache (make-hash-table :test #'equal))
 
@@ -214,7 +219,7 @@ This mode is not intended to be invoked directly; use
   (setq-local url-knowledge-url (concat "https://crates.io/crates/" crate-name))
   (setq-local list-buffers-directory (gethash "description" crate-data))
   (insert "Name:          ")
-  (insert crate-name "\n")
+  (insert (or (gethash "name" crate-data) crate-name) "\n")
   (insert "Description:   ")
   (insert (crate--description))
   (insert "\n")
@@ -262,15 +267,13 @@ or switches to an existing one."
   (interactive "MRust Crate Name: ")
   (when (string-prefix-p "https://crates.io/crates/" name)
     (setq name (string-remove-prefix "https://crates.io/crates/" name)))
-  (setq name (string-replace "-" "_" name))
+  (setq name (downcase (string-replace "-" "_" name)))
   (let ((bufname (format "Crate: %s" name)))
     (if (get-buffer bufname)
         (switch-to-buffer bufname)
       (switch-to-buffer bufname)
       (setq-local crate-name name)
       (setq-local crate-data
-                  ;; (or (gethash crate-name crate-foosoten)
-                  ;;     (gethash (string-replace "_" "-" crate-name) crate-foosoten))
                   (or (gethash crate-name (crate-list-json))
                       (gethash (string-replace "_" "-" crate-name) (crate-list-json))))
       (crate-mode))))
