@@ -133,6 +133,17 @@ record, not the top-level crate table)."
         (crate-data-path nil))
     (should-not (crate-list-json))))
 
+(ert-deftest crate-list-json-invalid-content ()
+  "`crate-list-json' returns nil when the file contains invalid JSON."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (tmpfile (make-temp-file "crate-test-" nil ".json")))
+    (unwind-protect
+        (progn
+          (write-region "not json at all" nil tmpfile)
+          (let ((crate-data-path tmpfile))
+            (should-not (crate-list-json))))
+      (delete-file tmpfile))))
+
 (ert-deftest crate-list-json-memoized ()
   "`crate-list-json' memoizes results in `crate--data-cache'."
   (let ((crate--data-cache (make-hash-table :test 'equal))
@@ -178,6 +189,12 @@ record, not the top-level crate table)."
 (ert-deftest crate-bookmark-jump-handler-type ()
   "`crate-bookmark-jump' has a `bookmark-handler-type' property."
   (should (equal (get 'crate-bookmark-jump 'bookmark-handler-type) "Crate")))
+
+(ert-deftest crate-find-crate-no-data ()
+  "`find-crate' signals user-error when no crate data is loaded."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
+      (should-error (find-crate "nonexistent") :type 'user-error))))
 
 
 ;;; Interactive commands

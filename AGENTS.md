@@ -35,7 +35,7 @@ Files:
 `crate.el` sections roughly:
 
 1. Forward declarations and buffer-local state (`defvar-local`
-   `crate-name`, `crate-data`)
+   with `permanent-local` for `crate-name`, `crate-data`)
 2. defgroup / defcustom (including `crate--crates-io-url`
    `defconst`)
 3. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
@@ -77,7 +77,42 @@ makes the mode self-contained.
     ...))
 ```
 
-### `let*` for sequential bindings
+### `permanent-local` for mode-surviving state
+
+`define-derived-mode` calls `kill-all-local-variables`, which
+wipes all buffer-local bindings before the mode body runs.
+Variables set with `setq-local` before the mode call must carry
+`(put 'var 'permanent-local t)` to survive the wipe:
+
+```elisp
+(defvar-local crate-data nil)
+(put 'crate-data 'permanent-local t)
+
+;; In find-crate:
+(setq-local crate-data ...)  ; survives crate-mode's kill-all-local-variables
+(crate-mode)
+```
+
+Without `permanent-local`, `crate-mode`'s body sees the default
+value (nil) instead of the caller's value.
+
+### Graceful load failures
+
+`crate-list-json` wraps the entire file-load and JSON-parse in
+`condition-case` so decompression failures, parse errors, and
+missing files all silently return nil.  Callers (`find-crate`,
+`crate--keys`) check for nil and either signal a `user-error` or
+return an empty completion list.
+
+```elisp
+(condition-case nil
+    (let ((raw (with-temp-buffer
+                 (insert-file-contents path)
+                 (goto-char (point-min))
+                 (json-parse-buffer))))
+      ;; ... build table ...)
+  (error nil))
+```
 
 In `lexical-binding: t`, plain `let` evaluates all init forms in
 the outer scope — later bindings cannot reference earlier ones.

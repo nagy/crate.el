@@ -62,7 +62,9 @@
 (defvar browse-url-default-handlers nil)
 
 (defvar-local crate-name nil)
+(put 'crate-name 'permanent-local t)
 (defvar-local crate-data nil)
+(put 'crate-data 'permanent-local t)
 
 (defgroup crate nil
   "Browse Rust crates from a local JSON dump."
@@ -100,18 +102,21 @@ Used to generate crate module structure trees via
 (defun crate-list-json ()
   "Load the crate JSON dump from `crate-data-path'.
 Returns a hash table keyed by lowercase crate name, or nil if the
-file is missing.  Results are memoized via `with-memoization'."
+file is missing or cannot be parsed.  Results are memoized via
+`with-memoization'."
   (with-memoization (gethash 'data crate--data-cache)
     (when (and crate-data-path (file-exists-p crate-data-path))
-      (let ((raw (with-temp-buffer
-                   (insert-file-contents crate-data-path)
-                   (goto-char (point-min))
-                   (json-parse-buffer)))
-            (table (make-hash-table :test 'equal)))
-        (maphash (lambda (key val)
-                   (puthash (downcase key) val table))
-                 raw)
-        table))))
+      (condition-case nil
+          (let ((raw (with-temp-buffer
+                       (insert-file-contents crate-data-path)
+                       (goto-char (point-min))
+                       (json-parse-buffer)))
+                (table (make-hash-table :test 'equal)))
+            (maphash (lambda (key val)
+                       (puthash (downcase key) val table))
+                     raw)
+            table)
+        (error nil)))))
 
 (defvar crate-structure--cache (make-hash-table :test #'equal))
 
@@ -283,7 +288,7 @@ Loads from `crate-data-path' if needed and caches the result."
 (defun crate--annotate (candidate)
   "Completion annotation function for crate CANDIDATE."
   (let* ((data (gethash candidate (crate-list-json)))
-        (desc (and data (gethash "description" data))))
+         (desc (and data (gethash "description" data))))
     (when (and desc (not (eq desc :null))
                (not (string-empty-p desc)))
       (concat (propertize " " 'display '(space :align-to center))
@@ -334,9 +339,12 @@ or switches to an existing one."
         (switch-to-buffer bufname)
         (setq-local crate-name cand)
         (setq-local crate-data
-                    (or (gethash crate-name (crate-list-json))
-                        (gethash (string-replace "_" "-" crate-name) (crate-list-json))))
-        (crate-mode)))))
+                    (when-let* ((data (crate-list-json)))
+                      (or (gethash crate-name data)
+                          (gethash (string-replace "_" "-" crate-name) data))))
+        (if crate-data
+            (crate-mode)
+          (user-error "Crate `%s' not found" cand))))))
 
 
 ;;;###autoload
