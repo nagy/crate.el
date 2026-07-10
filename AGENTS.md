@@ -53,6 +53,8 @@ Files:
     `crate` category)
 12. Embark (action keymap `crate-embark-map`, export function,
     category registration)
+13. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+    bookmark support for filtered views)
 
 ## Conventions
 
@@ -181,7 +183,7 @@ static file on disk, results never go stale.
 
 ### Faces
 
-Five custom faces (`crate-name-face`, `crate-field-label`,
+Six custom faces (`crate-name-face`, `crate-field-label`,
 `crate-url`, `crate-date`, `crate-id`) inherit from `package.el`
 or standard faces when available, with built-in fallbacks.  No
 `(require 'package)` needed — the `:inherit` list resolves
@@ -248,8 +250,3 @@ against it in the `when-let*` binding, not in the body:
   `cargo-modules` per-crate from a temp directory.  Potentially
   slow for crates with large dependency trees.  Consider caching
   or precomputing.
-
-- **Tabulated list mode** — add a `crate-browse-crates` command
-  showing all crates in a sortable `tabulated-list-mode` table
-  (like nixos.el's `nixos-browse-options` / `nixos-browse-packages`).
-  Use the `nixos--define-browse-mode` macro pattern.

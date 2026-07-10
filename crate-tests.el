@@ -257,7 +257,8 @@ record, not the top-level crate table)."
 
 (ert-deftest crate-face-definitions ()
   "All custom faces are defined and inherit from known faces."
-  (dolist (face '(crate-name-face crate-field-label crate-url crate-date crate-id))
+  (dolist (face '(crate-name-face crate-field-label crate-url crate-date
+                  crate-id crate-description))
     (should (facep face))
     (should (face-attribute face :inherit))))
 
@@ -285,6 +286,74 @@ record, not the top-level crate table)."
     (fundamental-mode)
     (let ((major-mode 'fundamental-mode))
       (should-not (crate--org-store-link nil)))))
+
+
+;;; Browse mode
+
+(ert-deftest crate-browse-entry ()
+  "`crate-browse--entry' returns a proper tabulated-list entry."
+  (let ((data (crate-test--data-hash :description "A test crate")))
+    (let ((entry (crate-browse--entry "test-crate" data)))
+      (should (equal (car entry) "test-crate"))
+      (let ((cols (cadr entry)))
+        (should (equal (aref cols 0) "test-crate"))
+        (should (equal (aref cols 1) "A test crate"))))))
+
+(ert-deftest crate-browse-entries ()
+  "`crate-browse--entries' generates entries from `crate-list-json'."
+  (let* ((table (crate-test--crate-table
+                 '("htop" :description "process viewer")
+                 '("neovim" :description "text editor")))
+         (crate--data-cache (make-hash-table :test 'equal)))
+    (puthash 'data table crate--data-cache)
+    (let ((entries (crate-browse--entries)))
+      (should (= (length entries) 2))
+      (should (assoc "htop" entries))
+      (should (assoc "neovim" entries)))))
+
+(ert-deftest crate-browse-entries-filter ()
+  "`crate-browse--entries' filters by name-list."
+  (let* ((table (crate-test--crate-table
+                 '("htop" :description "process viewer")
+                 '("neovim" :description "text editor")))
+         (crate--data-cache (make-hash-table :test 'equal)))
+    (puthash 'data table crate--data-cache)
+    (let ((entries (crate-browse--entries '("htop"))))
+      (should (= (length entries) 1))
+      (should (assoc "htop" entries)))))
+
+(ert-deftest crate-browse-current-name ()
+  "`crate-browse--current-name' returns the entry at point."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "htop" ["htop" "process viewer"])
+                (list "neovim" ["neovim" "text editor"])))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (should (equal (crate-browse--current-name) "htop"))))
+
+(ert-deftest crate-browse-current-name-error ()
+  "`crate-browse--current-name' signals an error when no entry at point."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (insert "not an entry\n"))
+    (goto-char (point-min))
+    (should-error (crate-browse--current-name) :type 'user-error)))
+
+(ert-deftest crate-browse-bookmark-make-record ()
+  "Browse bookmark record includes name-list and prefix."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq-local crate-browse--name-list '("htop" "neovim"))
+    (setq-local crate-browse--name-prefix "search-term")
+    (setq-local tabulated-list-entries
+                (list (list "htop" ["htop" ""]) (list "neovim" ["neovim" ""])))
+    (let ((rec (crate-browse--bookmark-make-record)))
+      (should (string-match-p "search-term" (car rec)))
+      (should (equal (alist-get 'name-list rec) '("htop" "neovim")))
+      (should (equal (alist-get 'name-prefix rec) "search-term"))
+      (should (eq (alist-get 'handler rec) 'crate-browse--bookmark-jump)))))
 
 (provide 'crate-tests)
 ;;; crate-tests.el ends here

@@ -190,6 +190,12 @@ Inherits from `marginalia-date' when available."
 Inherits from `marginalia-number' when available."
   :group 'crate)
 
+(defface crate-description
+  '((t :inherit (package-description default)))
+  "Face for descriptions in `crate-browse-mode'.
+Inherits from `package-description' when available."
+  :group 'crate)
+
 (defvar crate-font-lock-keywords
   `(;; Field labels: "Name:", "Description:", etc.
     ("^\\([A-Z][a-z]+:\\)[[:space:]]*"
@@ -420,7 +426,130 @@ and delegates to `find-crate'."
 (with-eval-after-load 'org
   (require 'ol-crate))
 
-(provide 'crate)
+
+;;; Browse Mode
+
+(defvar-keymap crate-browse-mode-map
+  :doc "Keymap for `crate-browse-mode'."
+  :parent tabulated-list-mode-map
+  "RET" #'crate-browse-visit
+  "b"   #'crate-browse-search-url
+  "g"   #'crate-browse-refresh)
+
+(define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
+  "Major mode for browsing Rust crates in a sortable table.
+
+\\{crate-browse-mode-map}
+\\<crate-browse-mode-map>
+\\[crate-browse-visit] on an entry to view full details,
+\\[crate-browse-search-url] to open on crates.io,
+\\[crate-browse-refresh] to reload the data."
+  :interactive nil
+  (setq tabulated-list-format
+        [("Crate" 40 t) ("Description" 0 nil)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key '("Crate" . nil))
+  (tabulated-list-init-header)
+  (hl-line-mode 1)
+  (setq-local bookmark-make-record-function
+              #'crate-browse--bookmark-make-record))
+
+(defvar-local crate-browse--name-list nil
+  "Buffer-local list of crate names that the browse buffer is filtered to.
+When nil, all crates are shown.")
+
+(defvar-local crate-browse--name-prefix nil
+  "Buffer-local search term used for naming the browse buffer.")
+
+(defun crate-browse--entry (name data)
+  "Return a `tabulated-list' entry for crate NAME with DATA."
+  (let ((desc (gethash "description" data)))
+    (list name
+          (vector (propertize name 'face 'crate-name-face)
+                  (propertize (if (and desc (not (eq desc :null)))
+                                  (string-limit (string-replace "\n" " " desc)
+                                                crate-annotation-width)
+                                "")
+                              'face 'crate-description)))))
+
+(defun crate-browse--entries (&optional name-list)
+  "Generate `tabulated-list-entries' for all crates.
+When NAME-LIST is non-nil, only include entries whose names
+appear in the list."
+  (let ((items (crate-list-json))
+        entries)
+    (when items
+      (if name-list
+          (dolist (name name-list (nreverse entries))
+            (let ((data (gethash name items)))
+              (when data
+                (push (crate-browse--entry name data) entries))))
+        (maphash (lambda (name data)
+                   (push (crate-browse--entry name data) entries))
+                 items)
+        (setq entries (nreverse entries))))))
+
+(defun crate-browse--current-name ()
+  "Return the crate name at point, or signal an error."
+  (or (tabulated-list-get-id)
+      (user-error "No crate on this line")))
+
+(defun crate-browse-visit ()
+  "Display details for the crate at point."
+  (interactive)
+  (find-crate (crate-browse--current-name)))
+
+(defun crate-browse-search-url ()
+  "Open the current crate on crates.io."
+  (interactive)
+  (browse-url (concat crate--crates-io-url
+                      (crate-browse--current-name))))
+
+(defun crate-browse-refresh ()
+  "Refresh the crate browse table."
+  (interactive)
+  (setq tabulated-list-entries
+        (crate-browse--entries crate-browse--name-list))
+  (tabulated-list-print t))
+
+(defun crate-browse--bookmark-make-record ()
+  "Create a bookmark record for the current browse buffer."
+  `(,(format "Crates: %s"
+             (or crate-browse--name-prefix
+                 (format "%d items" (length tabulated-list-entries))))
+    (name-list . ,crate-browse--name-list)
+    (name-prefix . ,crate-browse--name-prefix)
+    (handler . crate-browse--bookmark-jump)))
+
+(defun crate-browse--bookmark-jump (bookmark)
+  "Restore a crate browse BOOKMARK."
+  (let ((name-list (alist-get 'name-list bookmark))
+        (name-prefix (alist-get 'name-prefix bookmark)))
+    (crate-browse-crates name-list name-prefix)))
+
+;;;###autoload
+(defun crate-browse-crates (&optional name-list name-prefix)
+  "Display Rust crates in a browseable table.
+
+When NAME-LIST is non-nil (a list of names), only those crates
+are displayed.  This is used by Embark export.
+
+When NAME-PREFIX is non-nil, it is appended to the buffer name
+(e.g. \"*Crates: serde*\"), allowing multiple searches to
+coexist in separate buffers."
+  (interactive)
+  (let* ((buf-name (if name-prefix
+                       (format "*Crates: %s*" name-prefix)
+                     "*Crates*"))
+         (buf (get-buffer-create buf-name)))
+    (with-current-buffer buf
+      (crate-browse-mode)
+      (setq-local crate-browse--name-list name-list)
+      (setq-local crate-browse--name-prefix name-prefix)
+      (setq tabulated-list-entries
+            (crate-browse--entries name-list))
+      (tabulated-list-print))
+    (switch-to-buffer buf)))
 
 
 ;;; Embark
@@ -431,9 +560,8 @@ and delegates to `find-crate'."
 
 (defun crate--embark-export (candidates)
   "Embark export function for crate CANDIDATES.
-Opens each candidate in `find-crate'."
-  (dolist (cand candidates)
-    (find-crate cand)))
+Opens a `crate-browse-mode' buffer filtered to CANDIDATES."
+  (crate-browse-crates candidates))
 
 (defun crate--embark-browse-url (cand)
   "Open CAND on crates.io."
@@ -452,4 +580,5 @@ Opens each candidate in `find-crate'."
   (add-to-list 'embark-keymap-alist
                '(crate . crate-embark-map)))
 
+(provide 'crate)
 ;;; crate.el ends here
