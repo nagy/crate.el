@@ -136,6 +136,20 @@ binding.
   ...)
 ```
 
+### `:risky t` for external programs
+
+`defcustom` options that point to external executables (like
+`crate-modules-program`) should get `:risky t` to avoid Emacs
+prompting for confirmation:
+
+```elisp
+(defcustom crate-modules-program "cargo-modules"
+  "..."
+  :type 'string
+  :risky t
+  :group 'crate)
+```
+
 ### `defconst` for shared strings
 
 Non-configurable constants that appear in multiple places should
@@ -184,7 +198,8 @@ static file on disk, results never go stale.
 ### Faces
 
 Six custom faces (`crate-name-face`, `crate-field-label`,
-`crate-url`, `crate-date`, `crate-id`) inherit from `package.el`
+`crate-url`, `crate-date`, `crate-id`, `crate-description`)
+inherit from `package.el`
 or standard faces when available, with built-in fallbacks.  No
 `(require 'package)` needed — the `:inherit` list resolves
 left-to-right, skipping undefined faces.

@@ -68,7 +68,9 @@
 
 (defgroup crate nil
   "Browse Rust crates from a local JSON dump."
-  :group 'tools)
+  :group 'tools
+  :prefix "crate-"
+  :link '(url-link :tag "Repository" "https://github.com/nagy/crate.el"))
 
 (defcustom crate-data-path nil
   "Path to a static.crates.io JSON dump file.
@@ -85,6 +87,7 @@ crate name and each value is an object with fields like
 Used to generate crate module structure trees via
 `cargo modules structure'.  Set to nil to disable."
   :type 'string
+  :risky t
   :group 'crate)
 
 (defconst crate--crates-io-url "https://crates.io/crates/"
@@ -160,7 +163,7 @@ empty string when the description is missing or :null."
 ;;; Faces
 
 (defface crate-name-face
-  '((t :inherit (package-name bold)))
+  '((t :inherit (package-name bold) :height 1.2))
   "Face for the crate name in `crate-mode' detail buffers.
 Inherits from `package-name' when available, otherwise `bold'."
   :group 'crate)
