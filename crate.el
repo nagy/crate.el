@@ -53,14 +53,16 @@
 
 (require 'bookmark)
 (require 'json)
+(require 'cl-lib)
 
 ;; Forward-declare; ansi-color is optional at compile time.
 (declare-function ansi-color-apply-on-region "ansi-color")
 
+(defvar url-knowledge-url nil)
+(defvar browse-url-default-handlers nil)
+
 (defvar-local crate-name nil)
-(put 'crate-name 'permanent-local t)
 (defvar-local crate-data nil)
-(put 'crate-data 'permanent-local t)
 
 (defgroup crate nil
   "Browse Rust crates from a local JSON dump."
@@ -81,6 +83,14 @@ crate name and each value is an object with fields like
 Used to generate crate module structure trees via
 `cargo modules structure'.  Set to nil to disable."
   :type 'string
+  :group 'crate)
+
+(defconst crate--crates-io-url "https://crates.io/crates/"
+  "Base URL for crates.io crate pages.")
+
+(defcustom crate-annotation-width 70
+  "Maximum width of the description annotation shown during completion."
+  :type 'integer
   :group 'crate)
 
 ;;; Cache
@@ -143,15 +153,6 @@ empty string when the description is missing or :null."
         (setq it (truncate-string-to-width it fill-column nil nil t))
         it)
       ""))
-
-(defun crate--insert-field (label key)
-  "Insert LABEL, then the value of KEY from `crate-data'.
-If the value is nil or :null, nothing is inserted after the label."
-  (insert label)
-  (let ((val (gethash key crate-data)))
-    (unless (or (null val) (eq val :null))
-      (insert val)))
-  (insert "\n"))
 
 ;;; Faces
 
@@ -216,67 +217,126 @@ This mode is not intended to be invoked directly; use
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'ignore)
-  (setq-local url-knowledge-url (concat "https://crates.io/crates/" crate-name))
+  (setq-local url-knowledge-url (concat crate--crates-io-url crate-name))
   (setq-local list-buffers-directory (gethash "description" crate-data))
-  (insert "Name:          ")
-  (insert (or (gethash "name" crate-data) crate-name) "\n")
-  (insert "Description:   ")
-  (insert (crate--description))
-  (insert "\n")
-  ;; Repository (special: may cd into local checkout)
-  (insert "Repository:    ")
-  (when-let* ((it (gethash "repository" crate-data)))
-    (unless (eq it :null)
-      (insert (propertize it 'mouse-face 'highlight))
-      (let ((filename (format "/mnt/archive/%s.git.sqfs/"
-                              (string-replace "/" "__"
-                                              (string-remove-prefix "https://" it)))))
-        (when (file-exists-p filename)
-          (cd filename)))))
-  (insert "\n")
-  (crate--insert-field "Homepage:      " "homepage")
-  (crate--insert-field "Documentation: " "documentation")
-  (crate--insert-field "Updated:       " "updated_at")
-  (insert "Id:            ")
-  (when-let* ((it (gethash "id" crate-data)))
-    (unless (eq it :null)
-      (insert (number-to-string (floor it)))))
-  (insert "\n\n")
-  ;; (insert-crate-structure)
-  ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
-  (save-excursion
+  (cl-labels
+      ((field (label key)
+         "Insert LABEL, then the value of KEY from `crate-data'.
+If the value is nil or :null, nothing is inserted after the label."
+         (insert label)
+         (let ((val (gethash key crate-data)))
+           (unless (or (null val) (eq val :null))
+             (insert val)))
+         (insert "\n")))
+    (insert "Name:          ")
+    (insert (or (gethash "name" crate-data) crate-name) "\n")
+    (insert "Description:   ")
+    (insert (crate--description))
+    (insert "\n")
+    ;; Repository (special: may cd into local checkout)
+    (insert "Repository:    ")
+    (when-let* ((it (gethash "repository" crate-data)))
+      (unless (eq it :null)
+        (insert (propertize it 'mouse-face 'highlight))
+        (let ((filename (format "/mnt/archive/%s.git.sqfs/"
+                                (string-replace "/" "__"
+                                                (string-remove-prefix "https://" it)))))
+          (when (file-exists-p filename)
+            (cd filename)))))
+    (insert "\n")
+    (field "Homepage:      " "homepage")
+    (field "Documentation: " "documentation")
+    (field "Updated:       " "updated_at")
+    (insert "Id:            ")
+    (when-let* ((it (gethash "id" crate-data)))
+      (unless (eq it :null)
+        (insert (number-to-string (floor it)))))
+    (insert "\n\n")
+    ;; (insert-crate-structure)
+    ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "https?://[^[:space:]\n]+" nil t)
+        (add-text-properties (match-beginning 0) (match-end 0)
+                             '(mouse-face highlight))))
+    (font-lock-ensure)
+    (set-buffer-modified-p nil)
     (goto-char (point-min))
-    (while (re-search-forward "https?://[^[:space:]\n]+" nil t)
-      (add-text-properties (match-beginning 0) (match-end 0)
-                           '(mouse-face highlight))))
-  (font-lock-ensure)
-  (set-buffer-modified-p nil)
-  (goto-char (point-min))
-  (read-only-mode 1))
+    (read-only-mode 1)))
+
+
+;;; Completion
+
+(defvar crate--keys-cache nil
+  "Cached list of lowercase crate names for completion.
+Set by `crate--keys' and cleared by `crate-refresh-cache'.")
+
+(defun crate--keys ()
+  "Return the list of all crate names for completion.
+Loads from `crate-data-path' if needed and caches the result."
+  (unless crate--keys-cache
+    (let ((data (crate-list-json)))
+      (when data
+        (setq crate--keys-cache (hash-table-keys data)))))
+  crate--keys-cache)
+
+(defun crate--annotate (candidate)
+  "Completion annotation function for crate CANDIDATE."
+  (let* ((data (gethash candidate (crate-list-json)))
+        (desc (and data (gethash "description" data))))
+    (when (and desc (not (eq desc :null))
+               (not (string-empty-p desc)))
+      (concat (propertize " " 'display '(space :align-to center))
+              (string-limit (string-replace "\n" " " desc)
+                            crate-annotation-width)))))
+
+(defun crate--collection (string predicate action)
+  "Completion collection for crates.
+See `completing-read' for the meaning of STRING, PREDICATE and
+ACTION."
+  (pcase action
+    ('metadata
+     '(metadata
+       (category . crate)
+       (annotation-function . crate--annotate)))
+    (_
+     (complete-with-action action (crate--keys) string predicate))))
+
+(defun crate-refresh-cache ()
+  "Discard cached crate data.
+The next `find-crate' or completion invocation will reload from
+the JSON file."
+  (interactive)
+  (setq crate--data-cache (make-hash-table :test 'equal)
+        crate--keys-cache nil
+        crate-structure--cache (make-hash-table :test 'equal))
+  (message "crate: cache cleared"))
 
 
 ;;; Interactive Commands
 
 ;;;###autoload
-(defun find-crate (name)
+(defun find-crate (&optional name)
   "Display details for the Rust crate NAME in `crate-mode'.
 When called interactively, prompt for a crate name with
 completion.  If NAME is a crates.io URL, the URL prefix is
 stripped first.  Creates a new buffer named \"Crate: <name>\"
 or switches to an existing one."
-  (interactive "MRust Crate Name: ")
-  (when (string-prefix-p "https://crates.io/crates/" name)
-    (setq name (string-remove-prefix "https://crates.io/crates/" name)))
-  (setq name (downcase (string-replace "-" "_" name)))
-  (let ((bufname (format "Crate: %s" name)))
-    (if (get-buffer bufname)
+  (interactive)
+  (let ((cand (or name
+                  (completing-read "crate> " #'crate--collection))))
+    (when (string-prefix-p crate--crates-io-url cand)
+      (setq cand (string-remove-prefix crate--crates-io-url cand)))
+    (setq cand (downcase (string-replace "-" "_" cand)))
+    (let ((bufname (format "Crate: %s" cand)))
+      (if (get-buffer bufname)
+          (switch-to-buffer bufname)
         (switch-to-buffer bufname)
-      (switch-to-buffer bufname)
-      (setq-local crate-name name)
-      (setq-local crate-data
-                  (or (gethash crate-name (crate-list-json))
-                      (gethash (string-replace "_" "-" crate-name) (crate-list-json))))
-      (crate-mode))))
+        (setq-local crate-name cand)
+        (setq-local crate-data
+                    (or (gethash crate-name (crate-list-json))
+                        (gethash (string-replace "_" "-" crate-name) (crate-list-json))))
+        (crate-mode)))))
 
 
 ;;;###autoload
@@ -292,7 +352,8 @@ directly to `find-crate', which strips the crates.io prefix."
   (interactive)
   (with-eval-after-load 'browse-url
     (add-to-list 'browse-url-default-handlers
-                 '("^https://crates\\.io/crates/" . crate-browse-url))))
+                 (cons (concat "^" (regexp-quote crate--crates-io-url))
+                       'crate-browse-url))))
 
 ;;; Bookmarks
 

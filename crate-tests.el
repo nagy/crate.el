@@ -83,30 +83,26 @@ record, not the top-level crate table)."
         (crate-data (make-hash-table :test 'equal)))
     (should (equal (crate--description) ""))))
 
-(ert-deftest crate-insert-field ()
-  "`crate--insert-field' inserts label and value."
+(ert-deftest crate-mode-fields ()
+  "`crate-mode' renders fields: label+value, label-only for :null, label-only for missing."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :homepage "https://example.com")
-    (with-temp-buffer
-      (crate--insert-field "Homepage: " "homepage")
-      (should (string-match-p "Homepage:" (buffer-string)))
-      (should (string-match-p "https://example.com" (buffer-string))))))
-
-(ert-deftest crate-insert-field-null ()
-  "`crate--insert-field' inserts only label when value is :null."
-  (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :homepage :null)
-    (with-temp-buffer
-      (crate--insert-field "Homepage: " "homepage")
-      (should (equal (buffer-string) "Homepage: \n")))))
-
-(ert-deftest crate-insert-field-missing ()
-  "`crate--insert-field' inserts only label when key is missing."
-  (crate-test--with-crate "test-crate"
-      (make-hash-table :test 'equal)
-    (with-temp-buffer
-      (crate--insert-field "Homepage: " "homepage")
-      (should (equal (buffer-string) "Homepage: \n")))))
+      (crate-test--data-hash :name "test-crate"
+                             :description "a crate"
+                             :homepage "https://example.com"
+                             :documentation :null
+                             :id 42)
+    (let ((crate--data-cache (make-hash-table :test 'equal)))
+      (cl-letf (((symbol-function 'cd) #'ignore)
+                ((symbol-function 'url-knowledge-url) nil))
+        (with-temp-buffer
+          (crate-mode)
+          (let ((content (buffer-string)))
+            ;; Homepage has a value.
+            (should (string-match-p "Homepage:.*example.com" content))
+            ;; Documentation is :null → label only.
+            (should (string-match-p "Documentation: *\n" content))
+            ;; Updated has no key → label only.
+            (should (string-match-p "Updated: *\n" content))))))))
 
 
 ;;; Cache

@@ -34,24 +34,86 @@ Files:
 
 `crate.el` sections roughly:
 
-1. defgroup / defcustom
-2. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
-3. Helpers (`crate--description`, `crate--insert-field`)
-4. Faces (`defface` definitions, `crate-font-lock-keywords`)
-5. Major Mode (`crate-mode`, derived from `text-mode`)
-6. Interactive Commands (`find-crate`, `crate-browse-url`,
+1. Forward declarations and buffer-local state (`defvar-local`
+   `crate-name`, `crate-data`)
+2. defgroup / defcustom (including `crate--crates-io-url`
+   `defconst`)
+3. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
+4. Helpers (`crate--description`)
+5. Faces (`defface` definitions, `crate-font-lock-keywords`)
+6. Major Mode (`crate-mode`, derived from `text-mode`, with
+   `cl-labels` local helper)
+7. Completion (`crate--keys`, `crate--annotate`,
+   `crate--collection`, `crate-refresh-cache`)
+8. Interactive Commands (`find-crate`, `crate-browse-url`,
    `crate-install-browse-url-handler`)
-7. Bookmarks (`crate--bookmark-make-record-function`,
+9. Bookmarks (`crate--bookmark-make-record-function`,
    `crate-bookmark-jump`)
-8. Org Integration (deferred load of `ol-crate`)
+10. Org Integration (deferred load of `ol-crate`)
 
 ## Conventions
 
 ### Byte-compiler silencing
 
 External vars/faces from optional deps are declared with
-`(defvar <var>)` without a value.  Cross-file function refs use
-`declare-function`.
+`(defvar <var> nil)` with an explicit `nil` value.  Cross-file
+function refs use `declare-function`.  Required deps get
+`(require 'package)`.
+
+### `cl-labels` for mode-local helpers
+
+Helper functions that are only called from within a major mode
+body should be defined as `cl-labels` closures scoped to the
+mode, not as top-level `defun`s.  This keeps them private and
+makes the mode self-contained.
+
+```elisp
+(define-derived-mode crate-mode text-mode "Crate"
+  "Docstring."
+  (cl-labels ((field (label key)
+                (insert label)
+                ...))
+    (field "Homepage: " "homepage")
+    ...))
+```
+
+### `let*` for sequential bindings
+
+In `lexical-binding: t`, plain `let` evaluates all init forms in
+the outer scope — later bindings cannot reference earlier ones.
+Use `let*` when one binding's init form depends on a prior
+binding.
+
+```elisp
+;; Wrong — desc can't see data
+(let ((data (gethash key hash))
+      (desc (gethash "description" data)))
+  ...)
+
+;; Correct
+(let* ((data (gethash key hash))
+       (desc (gethash "description" data)))
+  ...)
+```
+
+### `defconst` for shared strings
+
+Non-configurable constants that appear in multiple places should
+use `defconst`:
+
+```elisp
+(defconst crate--crates-io-url "https://crates.io/crates/"
+  "Base URL for crates.io crate pages.")
+```
+
+### Completion conventions
+
+The completion collection function (`crate--collection`) returns
+`(metadata (category . crate) (annotation-function . ...))` for
+the `metadata` action.  This gives Marginalia and Embark a
+category to hook into.  Crate names are cached in
+`crate--keys-cache` to avoid rebuilding the list from the JSON
+hash on every keystroke.
 
 ### Memoization
 
@@ -136,7 +198,7 @@ against it in the `when-let*` binding, not in the body:
 
 | Dependency | Required? | Why |
 |-----------|-----------|-----|
-| Emacs 30.1 | yes | `json-parse-buffer`, `with-memoization`, `string-replace` |
+| Emacs 30.1 | yes | `json-parse-buffer`, `with-memoization`, `string-replace`, `cl-labels` |
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
