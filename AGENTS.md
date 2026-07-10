@@ -7,9 +7,32 @@ interface for browsing Rust crates from a local `static.crates.io`
 JSON dump.  Browse URL handler integration redirects crates.io
 URLs to `find-crate`.
 
+## Build & test
+
+```sh
+nix-build --no-out-link default.nix          # build
+emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
+```
+
+Byte-compile with warnings as errors (not yet wired into the Nix
+build's checkPhase — add `turnCompilationWarningToError = true` and
+a `checkPhase` once the test file is byte-compilable):
+
+```sh
+emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+  -f batch-byte-compile crate.el
+```
+
 ## Architecture
 
-Single file (`crate.el`), sections roughly:
+Files:
+
+- `crate.el` — main package
+- `ol-crate.el` — Org link support
+- `crate-tests.el` — ERT test suite
+- `default.nix` — Nix build
+
+`crate.el` sections roughly:
 
 1. defgroup / defcustom
 2. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
@@ -71,6 +94,44 @@ Org link types live in `ol-crate.el`, loaded via
 function (`crate--org-store-link`) is defined in `ol-crate.el`
 with `declare-function` and `defvar` for cross-file references.
 
+### Null guard in `when-let*` conditions
+
+JSON `null` becomes the keyword `:null` from `json-parse-buffer`.
+String functions like `string-replace` error on `:null`, so guard
+against it in the `when-let*` binding, not in the body:
+
+```elisp
+;; Wrong — string-replace errors on :null before the if check
+(when-let* ((it (gethash "key" data)))
+  (setq it (string-replace "\n" "" it))
+  (if (eq it :null) "" it))
+
+;; Correct — guard rejects :null before string operations
+(or (when-let* ((it (gethash "key" data))
+                ((not (eq it :null))))
+      (string-replace "\n" "" it))
+    "")
+```
+
+### Test conventions
+
+- `crate-test--data-hash` builds a mock `crate-data` hash table from
+  keyword-value pairs (inner record, not keyed by crate name).
+- `crate-test--crate-table` builds a mock top-level table keyed by
+  crate name, suitable as the return value of `crate-list-json`.
+- `crate-test--with-crate` macro binds `crate-name` and `crate-data`
+  for testing functions that read those buffer-local variables.
+- Mock `find-crate`, `crate-mode`, `switch-to-buffer`, and
+  `org-link-store-props` with `cl-letf` on `symbol-function`.
+- Hash tables with identical content are not `equal` in Elisp —
+  compare individual `gethash` values instead.
+- When mocking `org-link-store-props`, use a `&rest` lambda and
+  `plist-get` to extract `:type` and `:link` — the real function
+  uses `&key` which doesn't compose with `cl-letf` closures.
+- Tests that need `browse-url-default-handlers` must `(require
+  'browse-url)` first — `crate-install-browse-url-handler` uses
+  `with-eval-after-load`, which is a no-op if browse-url isn't loaded.
+
 ## Dependencies
 
 | Dependency | Required? | Why |
@@ -78,4 +139,5 @@ with `declare-function` and `defvar` for cross-file references.
 | Emacs 30.1 | yes | `json-parse-buffer`, `with-memoization`, `string-replace` |
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
+| browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | ansi-color | soft | used by `insert-crate-structure` for cargo-modules output |

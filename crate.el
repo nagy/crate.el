@@ -132,10 +132,12 @@ Applies ANSI color escapes in the inserted region."
   "Return the description of the current crate.
 Collapses newlines and truncates to `fill-column'.  Returns an
 empty string when the description is missing or :null."
-  (when-let* ((it (gethash "description" crate-data)))
-    (setq it (string-replace "\n" "" it))
-    (setq it (truncate-string-to-width it fill-column nil nil t))
-    (if (eq it :null) "" it)))
+  (or (when-let* ((it (gethash "description" crate-data))
+                  ((not (eq it :null))))
+        (setq it (string-replace "\n" "" it))
+        (setq it (truncate-string-to-width it fill-column nil nil t))
+        it)
+      ""))
 
 (defun crate--insert-field (label key)
   "Insert LABEL, then the value of KEY from `crate-data'.
