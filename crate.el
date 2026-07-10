@@ -1,5 +1,55 @@
 ;;; crate.el --- Rust crates -*- lexical-binding: t -*-
+
+;; Copyright (C) 2025-2026  Daniel Nagy
+
+;; This file is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU Affero General Public License as
+;; published by the Free Software Foundation, either version 3 of the
+;; License, or (at your option) any later version.
+
+;; This file is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU Affero General Public License for more details.
+
+;; You should have received a copy of the GNU Affero General Public
+;; License along with this file.  If not, see
+;; <https://www.gnu.org/licenses/>.
+
+;; Author: Daniel Nagy
+;; Version: 0.1.0
+;; Keywords: tools
 ;; Package-Requires: ((emacs "30.1"))
+
+;;; Commentary:
+
+;; This package provides an interactive interface for browsing Rust
+;; crates from a local static.crates.io JSON dump.
+;;
+;; Data sources are configurable via `defcustom':
+;;
+;;   - `crate-data-path'  -- Path to a static.crates.io JSON dump file.
+;;
+;; Commands:
+;;
+;;   M-x find-crate  -- look up a Rust crate by name
+;;
+;; Deep integration:
+;;
+;;   - `crate-mode' (major mode) powers the detail buffer with
+;;     bookmark support.
+;;
+;;   - `crate-install-browse-url-handler' registers a handler so
+;;     that crates.io URLs opened with `browse-url' are redirected
+;;     to `find-crate'.
+;;
+;;   - Org link support for `crate:' links via `ol-crate'.
+;;
+;; Usage:
+;;
+;;   (crate-install-browse-url-handler)
+
+;;; Code:
 
 (require 'bookmark)
 
