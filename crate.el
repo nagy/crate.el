@@ -52,7 +52,9 @@
 ;;; Code:
 
 (require 'bookmark)
+(require 'json)
 
+;; Forward-declare; ansi-color is optional at compile time.
 (declare-function ansi-color-apply-on-region "ansi-color")
 
 (defvar-local crate-name nil)
