@@ -13,6 +13,22 @@ melpaBuild {
 
   packageRequires = [ ];
 
+  turnCompilationWarningToError = true;
+
+  checkPhase = ''
+    runHook preCheck
+    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+      -f batch-byte-compile crate.el
+    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+      -f batch-byte-compile crate-tests.el
+    emacs --batch -L . \
+      -l crate-tests.el \
+      -f ert-run-tests-batch-and-exit
+    runHook postCheck
+  '';
+
+  doCheck = true;
+
   meta = {
     description = "Browse Rust crates from Emacs";
     longDescription = ''

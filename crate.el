@@ -250,7 +250,20 @@ If the value is nil or :null, nothing is inserted after the label."
             (cd filename)))))
     (insert "\n")
     (field "Homepage:      " "homepage")
-    (field "Documentation: " "documentation")
+    ;; Documentation (with docs.rs fallback)
+    (insert (propertize "Documentation: " 'face 'crate-field-label))
+    (let ((doc (gethash "documentation" crate-data)))
+      (if (and doc (not (eq doc :null)))
+          (insert doc)
+        (let ((url (format "https://docs.rs/%s"
+                           (downcase (string-replace "_" "-"
+                                                     (or (gethash "name" crate-data) crate-name))))))
+          (insert-text-button url
+                              'action (lambda (_) (browse-url url))
+                              'follow-link t
+                              'face 'link
+                              'help-echo "Open documentation on docs.rs"))))
+    (insert "\n")
     (field "Updated:       " "updated_at")
     (insert "Id:            ")
     (when-let* ((it (gethash "id" crate-data)))
@@ -316,6 +329,23 @@ the JSON file."
         crate--keys-cache nil
         crate-structure--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
+
+
+;;; Marginalia
+
+(defun crate--marginalia-annotator (cand)
+  "Marginalia annotator for `crate' completion candidates.
+Shows the crate description."
+  (when-let* ((data (gethash cand (crate-list-json)))
+              (desc (gethash "description" data))
+              ((not (eq desc :null))))
+    desc))
+
+(defvar marginalia-annotator-registry nil)
+
+(with-eval-after-load 'marginalia
+  (add-to-list 'marginalia-annotator-registry
+               '(crate crate--marginalia-annotator builtin none)))
 
 
 ;;; Interactive Commands
@@ -391,4 +421,35 @@ and delegates to `find-crate'."
   (require 'ol-crate))
 
 (provide 'crate)
+
+
+;;; Embark
+
+(defvar embark-exporters-alist nil)
+(defvar embark-keymap-alist nil)
+(defvar embark-general-map nil)
+
+(defun crate--embark-export (candidates)
+  "Embark export function for crate CANDIDATES.
+Opens each candidate in `find-crate'."
+  (dolist (cand candidates)
+    (find-crate cand)))
+
+(defun crate--embark-browse-url (cand)
+  "Open CAND on crates.io."
+  (browse-url (concat crate--crates-io-url cand)))
+
+(defvar-keymap crate-embark-map
+  :doc "Embark actions for crate candidates."
+  :parent embark-general-map
+  "RET" #'find-crate
+  "b"   #'crate--embark-browse-url
+  "i"   #'insert)
+
+(with-eval-after-load 'embark
+  (add-to-list 'embark-exporters-alist
+               '(crate . crate--embark-export))
+  (add-to-list 'embark-keymap-alist
+               '(crate . crate-embark-map)))
+
 ;;; crate.el ends here

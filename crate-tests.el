@@ -84,7 +84,7 @@ record, not the top-level crate table)."
     (should (equal (crate--description) ""))))
 
 (ert-deftest crate-mode-fields ()
-  "`crate-mode' renders fields: label+value, label-only for :null, label-only for missing."
+  "`crate-mode' renders fields: label+value, docs.rs fallback, label-only for missing."
   (crate-test--with-crate "test-crate"
       (crate-test--data-hash :name "test-crate"
                              :description "a crate"
@@ -99,8 +99,8 @@ record, not the top-level crate table)."
           (let ((content (buffer-string)))
             ;; Homepage has a value.
             (should (string-match-p "Homepage:.*example.com" content))
-            ;; Documentation is :null → label only.
-            (should (string-match-p "Documentation: *\n" content))
+            ;; Documentation is :null → docs.rs fallback link.
+            (should (string-match-p "docs\\.rs/test-crate" content))
             ;; Updated has no key → label only.
             (should (string-match-p "Updated: *\n" content))))))))
 

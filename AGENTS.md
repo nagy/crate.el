@@ -14,9 +14,8 @@ nix-build --no-out-link default.nix          # build
 emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
 ```
 
-Byte-compile with warnings as errors (not yet wired into the Nix
-build's checkPhase — add `turnCompilationWarningToError = true` and
-a `checkPhase` once the test file is byte-compilable):
+Byte-compile with warnings as errors (wired into the Nix
+build's checkPhase):
 
 ```sh
 emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
@@ -50,6 +49,10 @@ Files:
 9. Bookmarks (`crate--bookmark-make-record-function`,
    `crate-bookmark-jump`)
 10. Org Integration (deferred load of `ol-crate`)
+11. Marginalia (`crate--marginalia-annotator`, registered for
+    `crate` category)
+12. Embark (action keymap `crate-embark-map`, export function,
+    category registration)
 
 ## Conventions
 
@@ -241,28 +244,12 @@ against it in the `when-let*` binding, not in the body:
 
 ## TODO
 
-- **docs.rs fallback for missing documentation** — crates.io
-  automatically links to `https://docs.rs/{name}` when a crate
-  has no custom documentation URL.  Do the same: when the
-  `documentation` field is null, insert
-  `https://docs.rs/{crate-name}` as the documentation link.
-
 - **Batch package metadata** — `crate-structure` invokes
   `cargo-modules` per-crate from a temp directory.  Potentially
   slow for crates with large dependency trees.  Consider caching
   or precomputing.
 
-- **Tests in checkPhase** — wire `crate-tests.el` into
-  `default.nix`'s checkPhase once the test file byte-compiles
-  without warnings.
-
 - **Tabulated list mode** — add a `crate-browse-crates` command
   showing all crates in a sortable `tabulated-list-mode` table
   (like nixos.el's `nixos-browse-options` / `nixos-browse-packages`).
   Use the `nixos--define-browse-mode` macro pattern.
-
-- **Marginalia annotators** — register `crate` completion category
-  annotator showing description and version in `marginalia`.
-
-- **Embark integration** — add Embark export and action keymaps
-  for crate candidates.
