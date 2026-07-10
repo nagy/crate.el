@@ -362,8 +362,14 @@ record, not the top-level crate table)."
   "Path to the test data file containing serde and tokio.
 Substituted at build time by default.nix.")
 
+(defun crate-test--data-ready-p ()
+  "Return non-nil if the test data file is available."
+  (and (not (string-prefix-p "@" crate-test--data-file))
+       (file-readable-p crate-test--data-file)))
+
 (ert-deftest crate-e2e-load-data ()
   "End-to-end: `crate-list-json' loads the test data file."
+  (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-data-path crate-test--data-file))
     (let ((data (crate-list-json)))
@@ -374,8 +380,8 @@ Substituted at build time by default.nix.")
 
 (ert-deftest crate-e2e-find-crate ()
   "End-to-end: `find-crate' displays serde detail buffer."
+  (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache nil)
         (crate-data-path crate-test--data-file))
     (cl-letf (((symbol-function 'pop-to-buffer) #'ignore)
               ((symbol-function 'cd) #'ignore)
@@ -398,6 +404,7 @@ Substituted at build time by default.nix.")
 
 (ert-deftest crate-e2e-browse-crates ()
   "End-to-end: `crate-browse-crates' displays a table with test data."
+  (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate--keys-cache nil)
         (crate-data-path crate-test--data-file))

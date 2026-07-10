@@ -129,13 +129,11 @@ tree.  Results are memoized per crate name via
     (with-temp-buffer
       (let ((pkg-dir (string-replace "_" "-" name))
             (exitcode (call-process crate-modules-program nil t nil "structure" "--package" (string-replace "_" "-" name) "--lib")))
-        ;; (message "ddir %s exitcode %d crate-name: %s" default-directory exitcode name)
         ;; the case in esp-hal crate
         (unless (eq 0 exitcode)
           (erase-buffer)
           (let ((default-directory pkg-dir))
             (call-process crate-modules-program nil t nil "structure" "--package" pkg-dir "--lib"))))
-      ;; (call-process crate-modules-program nil t nil "structure" "--package" name "--lib")
       (string-remove-prefix "\n" (buffer-string)))))
 
 (defun insert-crate-structure ()
@@ -223,7 +221,6 @@ Inherits from `package-description' when available."
 \\{crate-mode-map}
 This mode is not intended to be invoked directly; use
 `find-crate' instead."
-  ;; (setq-local list-buffers-directory crate-name)
   (cd temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
