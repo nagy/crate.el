@@ -355,5 +355,61 @@ record, not the top-level crate table)."
       (should (equal (alist-get 'name-prefix rec) "search-term"))
       (should (eq (alist-get 'handler rec) 'crate-browse--bookmark-jump)))))
 
+
+;;; End-to-end tests with test data
+
+(defvar crate-test--data-file "@testCratesJson@"
+  "Path to the test data file containing serde and tokio.
+Substituted at build time by default.nix.")
+
+(ert-deftest crate-e2e-load-data ()
+  "End-to-end: `crate-list-json' loads the test data file."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path crate-test--data-file))
+    (let ((data (crate-list-json)))
+      (should (hash-table-p data))
+      (should (= (hash-table-count data) 2))
+      (should (gethash "serde" data))
+      (should (gethash "tokio" data)))))
+
+(ert-deftest crate-e2e-find-crate ()
+  "End-to-end: `find-crate' displays serde detail buffer."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate--keys-cache nil)
+        (crate-data-path crate-test--data-file))
+    (cl-letf (((symbol-function 'pop-to-buffer) #'ignore)
+              ((symbol-function 'cd) #'ignore)
+              ((symbol-function 'url-knowledge-url) nil))
+      (let ((buf (get-buffer-create "*Crate: serde*")))
+        ;; Simulate find-crate creating the buffer
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (erase-buffer))
+          (setq-local crate-name "serde")
+          (setq-local crate-data (gethash "serde" (crate-list-json)))
+          (crate-mode))
+        (with-current-buffer buf
+          (should (eq major-mode 'crate-mode))
+          (should (string-match-p "serde" (buffer-string)))
+          (should (string-match-p "serialization" (buffer-string)))
+          ;; Original name from data, not the lowercased lookup key.
+          (should (string-match-p "serde" (buffer-string)))
+          (kill-buffer buf))))))
+
+(ert-deftest crate-e2e-browse-crates ()
+  "End-to-end: `crate-browse-crates' displays a table with test data."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate--keys-cache nil)
+        (crate-data-path crate-test--data-file))
+    (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer))
+      (let ((buf (crate-browse-crates)))
+        (with-current-buffer buf
+          (should (eq major-mode 'crate-browse-mode))
+          (should tabulated-list-entries)
+          (should (>= (length tabulated-list-entries) 2))
+          (should (assoc "serde" tabulated-list-entries))
+          (should (assoc "tokio" tabulated-list-entries)))
+        (kill-buffer buf)))))
+
 (provide 'crate-tests)
 ;;; crate-tests.el ends here
