@@ -243,10 +243,3 @@ against it in the `when-let*` binding, not in the body:
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | ansi-color | soft | used by `insert-crate-structure` for cargo-modules output |
-
-## TODO
-
-- **Batch package metadata** — `crate-structure` invokes
-  `cargo-modules` per-crate from a temp directory.  Potentially
-  slow for crates with large dependency trees.  Consider caching
-  or precomputing.
