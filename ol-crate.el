@@ -32,6 +32,7 @@
 
 (defvar crate-name)
 (defvar crate-mode)
+(defvar crate--crates-io-url)
 
 (defun crate--org-store-link (_interactive-p)
   "Store a `crate:' link when in `crate-mode'."
@@ -42,9 +43,22 @@
                           (format "Rust Crate: %s" crate-name))
     t))
 
+(defun crate-org-export (path description backend _info)
+  "Export a `crate:' link to crates.io.
+PATH is the crate name, DESCRIPTION is the link text,
+BACKEND is the export backend."
+  (let ((url (format "%s%s" crate--crates-io-url
+                     (url-hexify-string path)))
+        (desc (or description path)))
+    (pcase backend
+      ('html (format "<a href=\"%s\">%s</a>" url desc))
+      ('latex (format "\\href{%s}{%s}" url desc))
+      (_ desc))))
+
 (org-link-set-parameters "crate"
                          :follow #'find-crate
-                         :store #'crate--org-store-link)
+                         :store #'crate--org-store-link
+                         :export #'crate-org-export)
 
 (provide 'ol-crate)
 ;;; ol-crate.el ends here

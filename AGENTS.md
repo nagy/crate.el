@@ -243,3 +243,11 @@ against it in the `when-let*` binding, not in the body:
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | ansi-color | soft | used by `insert-crate-structure` for cargo-modules output |
+
+## TODO
+
+- **Completion-at-point for `Cargo.toml`** — provide crate name
+  completion in `[dependencies]` sections of `Cargo.toml` buffers.
+  Hook into `completion-at-point-functions` with a custom function
+  that queries `crate--keys` for matching crate names.  Would make
+  crate.el a genuine Rust developer tool.
