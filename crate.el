@@ -61,16 +61,23 @@
 (put 'crate-data 'permanent-local t)
 
 (defgroup crate nil
-  "Browse Rust crates locally."
+  "Browse Rust crates from a local JSON dump."
   :group 'tools)
 
 (defcustom crate-data-path nil
-  "Path to a static.crates.io JSON dump file."
+  "Path to a static.crates.io JSON dump file.
+
+The file should contain a flat JSON object where each key is a
+crate name and each value is an object with fields like
+\"description\", \"repository\", \"homepage\", etc."
   :type 'file
   :group 'crate)
 
 (defcustom crate-modules-program "cargo-modules"
-  "Name or path of the cargo-modules executable."
+  "Name or path of the `cargo-modules' executable.
+
+Used to generate crate module structure trees via
+`cargo modules structure'.  Set to nil to disable."
   :type 'string
   :group 'crate)
 
@@ -79,6 +86,9 @@
 (defvar crate--data-cache (make-hash-table :test #'equal))
 
 (defun crate-list-json ()
+  "Load the crate JSON dump from `crate-data-path'.
+Returns a hash table keyed by crate name, or nil if the file is
+missing.  Results are memoized via `with-memoization'."
   (with-memoization (gethash 'data crate--data-cache)
     (when (and crate-data-path (file-exists-p crate-data-path))
       (with-temp-buffer
@@ -89,6 +99,10 @@
 (defvar crate-structure--cache (make-hash-table :test #'equal))
 
 (defun crate-structure (name)
+  "Return the module structure tree for the crate NAME.
+Invokes `crate-modules-program' to generate an ANSI-colored
+tree.  Results are memoized per crate name via
+`with-memoization'."
   (with-memoization (gethash name crate-structure--cache)
     (with-temp-buffer
       (let ((pkg-dir (string-replace "_" "-" name))
@@ -103,6 +117,8 @@
       (string-remove-prefix "\n" (buffer-string)))))
 
 (defun insert-crate-structure ()
+  "Insert the module structure tree for `crate-name' at point.
+Applies ANSI color escapes in the inserted region."
   (let ((p (point)))
     (insert (crate-structure crate-name))
     (ansi-color-apply-on-region p (point))))
@@ -111,6 +127,9 @@
 ;;; Helpers
 
 (defun crate--description ()
+  "Return the description of the current crate.
+Collapses newlines and truncates to `fill-column'.  Returns an
+empty string when the description is missing or :null."
   (when-let* ((it (gethash "description" crate-data)))
     (setq it (string-replace "\n" "" it))
     (setq it (truncate-string-to-width it fill-column nil nil t))
@@ -178,6 +197,11 @@ Inherits from `marginalia-number' when available."
 
 ;;;###autoload
 (define-derived-mode crate-mode text-mode "Crate"
+  "Major mode for displaying Rust crate details.
+
+\\{crate-mode-map}
+This mode is not intended to be invoked directly; use
+`find-crate' instead."
   ;; (setq-local list-buffers-directory crate-name)
   (cd temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
@@ -226,6 +250,11 @@ Inherits from `marginalia-number' when available."
 
 ;;;###autoload
 (defun find-crate (name)
+  "Display details for the Rust crate NAME in `crate-mode'.
+When called interactively, prompt for a crate name with
+completion.  If NAME is a crates.io URL, the URL prefix is
+stripped first.  Creates a new buffer named \"Crate: <name>\"
+or switches to an existing one."
   (interactive "MRust Crate Name: ")
   (when (string-prefix-p "https://crates.io/crates/" name)
     (setq name (string-remove-prefix "https://crates.io/crates/" name)))
@@ -245,6 +274,9 @@ Inherits from `marginalia-number' when available."
 
 ;;;###autoload
 (defun crate-browse-url (url &rest _args)
+  "Browse a Rust crate URL by dispatching to `find-crate'.
+Intended for use as a `browse-url' handler.  The URL is passed
+directly to `find-crate', which strips the crates.io prefix."
   (find-crate url))
 
 ;;;###autoload
@@ -258,7 +290,8 @@ Inherits from `marginalia-number' when available."
 ;;; Bookmarks
 
 (defun crate--bookmark-make-record-function ()
-  "A function to be used as `bookmark-make-record-function'."
+  "Create a bookmark record for the current crate buffer.
+Intended for use as `bookmark-make-record-function'."
   `(,(concat "Rust Crate: " crate-name)
     (handler . crate-bookmark-jump)
     (crate . ,crate-name)
@@ -268,7 +301,9 @@ Inherits from `marginalia-number' when available."
 
 ;;;###autoload
 (defun crate-bookmark-jump (bm)
-  "Jump to the crate bookmark BM."
+  "Restore a crate bookmark BM.
+Called by the bookmark system.  Extracts the crate name from BM
+and delegates to `find-crate'."
   (interactive (list (read-from-minibuffer "Bookmark: ")))
   (let ((name (bookmark-prop-get bm 'crate)))
     (find-crate name)))
