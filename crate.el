@@ -201,6 +201,9 @@ Inherits from `package-description' when available."
     ;; Crate name value
     ("^Name:[[:space:]]+\\(.+\\)"
      (1 'crate-name-face))
+    ;; Description value
+    ("^Description:[[:space:]]+\\(.+\\)"
+     (1 'crate-description))
     ;; URLs on Homepage/Documentation/Repository lines
     ("^\\(?:Homepage\\|Documentation\\|Repository\\):[[:space:]]+\\(https?://[^[:space:]\n]+\\)"
      (1 'crate-url nil t))
