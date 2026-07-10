@@ -127,22 +127,51 @@ If the value is nil or :null, nothing is inserted after the label."
 
 ;;; Faces
 
+(defface crate-name-face
+  '((t :inherit (package-name bold)))
+  "Face for the crate name in `crate-mode' detail buffers.
+Inherits from `package-name' when available, otherwise `bold'."
+  :group 'crate)
+
+(defface crate-field-label
+  '((t :inherit (package-help-section-name bold)))
+  "Face for field labels in `crate-mode' detail buffers.
+Inherits from `package-help-section-name' when available."
+  :group 'crate)
+
+(defface crate-url
+  '((t :inherit link))
+  "Face for URLs in `crate-mode' detail buffers."
+  :group 'crate)
+
+(defface crate-date
+  '((t :inherit marginalia-date))
+  "Face for update dates in `crate-mode' detail buffers.
+Inherits from `marginalia-date' when available."
+  :group 'crate)
+
+(defface crate-id
+  '((t :inherit marginalia-number))
+  "Face for crate ID numbers in `crate-mode' detail buffers.
+Inherits from `marginalia-number' when available."
+  :group 'crate)
+
 (defvar crate-font-lock-keywords
-  `(;; Field labels: "Name:", "Description:", etc. in bold
+  `(;; Field labels: "Name:", "Description:", etc.
     ("^\\([A-Z][a-z]+:\\)[[:space:]]*"
-     (1 'bold))
+     (1 'crate-field-label))
     ;; Crate name value
     ("^Name:[[:space:]]+\\(.+\\)"
-     (1 'bold))
+     (1 'crate-name-face))
     ;; URLs on Homepage/Documentation/Repository lines
     ("^\\(?:Homepage\\|Documentation\\|Repository\\):[[:space:]]+\\(https?://[^[:space:]\n]+\\)"
-     (1 'shr-link nil t))
+     (1 'crate-url nil t))
     ;; Updated date
     ("^Updated:[[:space:]]+\\(.+\\)"
-     (1 'marginalia-date))
+     (1 'crate-date))
     ;; Crate id number
     ("^Id:[[:space:]]+\\([0-9]+\\)"
-     (1 'marginalia-number)))
+     (1 'crate-id)))
   "Font-lock keywords for `crate-mode'.")
 
 ;;; Major Mode
