@@ -53,8 +53,6 @@
 
 (require 'bookmark)
 
-(declare-function org-link-set-parameters "ol")
-(declare-function org-link-store-props "ol")
 (declare-function ansi-color-apply-on-region "ansi-color")
 
 (defvar-local crate-name nil)
@@ -75,6 +73,8 @@
   "Name or path of the cargo-modules executable."
   :type 'string
   :group 'crate)
+
+;;; Cache
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
 
@@ -108,6 +108,8 @@
     (ansi-color-apply-on-region p (point))))
 
 
+;;; Helpers
+
 (defun crate--description ()
   (when-let* ((it (gethash "description" crate-data)))
     (setq it (string-replace "\n" "" it))
@@ -122,6 +124,8 @@ If the value is nil or :null, nothing is inserted after the label."
     (unless (or (null val) (eq val :null))
       (insert val)))
   (insert "\n"))
+
+;;; Faces
 
 (defvar crate-font-lock-keywords
   `(;; Field labels: "Name:", "Description:", etc. in bold
@@ -140,6 +144,8 @@ If the value is nil or :null, nothing is inserted after the label."
     ("^Id:[[:space:]]+\\([0-9]+\\)"
      (1 'marginalia-number)))
   "Font-lock keywords for `crate-mode'.")
+
+;;; Major Mode
 
 ;;;###autoload
 (define-derived-mode crate-mode text-mode "Crate"
@@ -187,6 +193,8 @@ If the value is nil or :null, nothing is inserted after the label."
   (read-only-mode 1))
 
 
+;;; Interactive Commands
+
 ;;;###autoload
 (defun find-crate (name)
   (interactive "MRust Crate Name: ")
@@ -218,6 +226,8 @@ If the value is nil or :null, nothing is inserted after the label."
     (add-to-list 'browse-url-default-handlers
                  '("^https://crates\\.io/crates/" . crate-browse-url))))
 
+;;; Bookmarks
+
 (defun crate--bookmark-make-record-function ()
   "A function to be used as `bookmark-make-record-function'."
   `(,(concat "Rust Crate: " crate-name)
@@ -235,18 +245,10 @@ If the value is nil or :null, nothing is inserted after the label."
     (find-crate name)))
 (put 'crate-bookmark-jump 'bookmark-handler-type "Crate")
 
-(defun crate--org-store-link (_interactive-p)
-  (when (eq major-mode 'crate-mode)
-    (org-link-store-props :type "crate"
-                          :link (format "crate:%s" crate-name)
-                          :description
-                          (format "Rust Crate: %s" crate-name))
-    t))
+;;; Org Integration
 
-(with-eval-after-load 'ol
-  (org-link-set-parameters "crate"
-                           :follow #'find-crate
-                           :store #'crate--org-store-link))
+(with-eval-after-load 'org
+  (require 'ol-crate))
 
 (provide 'crate)
 ;;; crate.el ends here
