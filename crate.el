@@ -194,11 +194,12 @@ JSON output, or a prior build attempt already failed."
 JSON is a hash table as returned by `json-parse-buffer' from a
 rustdoc JSON file.  Returns a nested list:
 
-  ((NAME KIND (CHILDREN...)) ...)
+  ((NAME KIND (CHILDREN...) DOC) ...)
 
 where children have the same structure.  KIND is a symbol:
 `module', `struct', `trait', `function', `macro', `enum', etc.
-Items without a module tree (non-modules) have nil as children."
+DOC is the first sentence of the item's docstring, or nil.
+Non-module items have nil as children."
   (declare (pure t) (side-effect-free t))
   (when-let* ((root-id (gethash "root" json))
               (index (gethash "index" json))
@@ -206,24 +207,36 @@ Items without a module tree (non-modules) have nil as children."
                           (string-to-number root-id)))
               (root-str (number-to-string root-num))
               (root-item (gethash root-str index)))
-    (cl-labels ((walk (id-str)
-                  (let* ((item (gethash id-str index))
-                         (name (gethash "name" item))
-                         (inner (gethash "inner" item))
-                         (kind (and inner
-                                    (let ((keys (hash-table-keys inner)))
-                                      (when keys
-                                        (intern (car keys))))))
-                         (children
-                          (when (and inner (eq kind 'module))
-                            (when-let* ((mod (gethash "module" inner))
-                                        (ids (gethash "items" mod)))
-                              (mapcar (lambda (id)
-                                        (walk (if (integerp id)
-                                                  (number-to-string id)
-                                                (number-to-string (floor id)))))
-                                      ids)))))
-                    (list name kind children))))
+    (cl-labels
+        ((doc-summary (raw)
+           (when (and raw (not (eq raw :null))
+                      (not (string-empty-p raw)))
+             (let ((s (string-replace "\n" " " raw)))
+               (string-limit
+                (or (when-let* ((dot (string-search ". " s)))
+                      (substring s 0 (1+ dot)))
+                    (when-let* ((hash (string-search " ##" s)))
+                      (substring s 0 hash))
+                    s)
+                80))))
+         (walk (id-str)
+           (let* ((item (gethash id-str index))
+                  (name (gethash "name" item))
+                  (inner (gethash "inner" item))
+                  (docs (doc-summary (gethash "docs" item)))
+                  (kind (and inner
+                             (let ((keys (hash-table-keys inner)))
+                               (when keys (intern (car keys))))))
+                  (children
+                   (when (and inner (eq kind 'module))
+                     (when-let* ((mod (gethash "module" inner))
+                                 (ids (gethash "items" mod)))
+                       (mapcar (lambda (id)
+                                 (walk (if (integerp id)
+                                           (number-to-string id)
+                                         (number-to-string (floor id)))))
+                               ids)))))
+             (list name kind children docs))))
       (mapcar (lambda (id)
                 (walk (if (integerp id)
                           (number-to-string id)
@@ -326,16 +339,24 @@ If the value is nil or :null, nothing is inserted after the label."
              (insert val)))
          (insert "\n"))
        (insert-doc-tree (items level)
-         "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation."
+         "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation.
+Each item is (NAME KIND CHILDREN DOC)."
          (dolist (item items)
            (let ((name (car item))
                  (_kind (cadr item))
-                 (children (caddr item)))
+                 (children (caddr item))
+                 (docs (cadddr item)))
              (unless (eq name :null)
                (insert (make-string (* level 2) ?\s)
-                       "- " name "\n"))
-             (when children
-               (insert-doc-tree children (1+ level)))))))
+                       "- " name)
+               (if children
+                   (progn
+                     (insert "\n")
+                     (insert-doc-tree children (1+ level)))
+                 (when docs
+                   (insert (propertize (concat " — " docs)
+                                       'face 'crate-description)))
+                 (insert "\n")))))))
     (insert "Name:          ")
     (insert (or (gethash "name" crate-data) crate-name) "\n")
     (insert "Description:   ")

@@ -31,6 +31,39 @@ Files:
 - `crate-doc.nix` — Nix expression for rustdoc JSON builds
 - `crate-tests.el` — ERT test suite
 - `default.nix` — Nix build
+- `CONTEXT.md` — domain glossary
+- `docs/adr/` — architectural decision records
+
+### Rustdoc JSON pipeline
+
+1. **`crate-doc.nix`** — companion Nix file. Uses a pinned crates.io-index
+   to generate Cargo.lock offline (sandbox-safe), then crane + nightly
+   rustc runs `cargo doc --output-format json`. Fully sandboxed.
+2. **`crate-doc--build`** — calls `nix-build` synchronously, returns
+   the Nix store output path.
+3. **`crate-doc--json`** — parses the JSON, memoized with `:failed`
+   sentinel to avoid retrying failed builds.
+4. **`crate-doc--module-tree`** — pure function, parses JSON into nested
+   `(NAME KIND (CHILDREN...) DOC)` tuples. `KIND` is a symbol (struct,
+   trait, function, module, macro, enum, etc.).
+5. **`insert-doc-tree`** — `cl-labels` helper in `crate-mode`. Renders
+   the tree with indentation; shows doc summaries after leaf items,
+   skips `:null`-named items (use imports).
+
+### Tree tuple shape
+
+The `crate-doc--module-tree` tuple always has 4 elements even when DOC
+is nil. Callers must use `(cadddr item)` to get docs:
+
+```elisp
+;; Each tree item:
+;;   (NAME KIND (CHILDREN...) DOC)
+;;
+;; Examples:
+;;   ("foo" struct nil "A foo struct.")      ;; leaf with doc
+;;   ("bar" function nil nil)                 ;; leaf without doc
+;;   ("submod" module (("baz" ...)) nil)      ;; module with children
+```
 
 `crate.el` sections roughly:
 
@@ -138,6 +171,19 @@ binding.
        (desc (gethash "description" data)))
   ...)
 ```
+
+### `defconst` for shared strings
+
+### `declare` for pure functions
+
+Functions with no I/O or global state should declare their purity:
+
+```elisp
+(declare (pure t) (side-effect-free t))
+```
+
+This enables the byte-compiler to optimize calls. Used on
+`crate-doc--module-tree` and `crate-browse--entry`.
 
 ### `defconst` for shared strings
 
