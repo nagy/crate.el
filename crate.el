@@ -54,9 +54,8 @@
 (require 'bookmark)
 (require 'json)
 (require 'cl-lib)
+(require 'ansi-color)
 
-;; Forward-declare; ansi-color is optional at compile time.
-(declare-function ansi-color-apply-on-region "ansi-color")
 
 (defvar url-knowledge-url nil)
 (defvar browse-url-default-handlers nil)
@@ -127,24 +126,28 @@ file is missing or cannot be parsed.  Results are memoized via
   "Return the module structure tree for the crate NAME.
 Invokes `crate-modules-program' to generate an ANSI-colored
 tree.  Results are memoized per crate name via
-`with-memoization'."
+`with-memoization'.  Returns nil on failure."
   (with-memoization (gethash name crate-structure--cache)
-    (with-temp-buffer
-      (let ((pkg-dir (string-replace "_" "-" name))
-            (exitcode (call-process crate-modules-program nil t nil "structure" "--package" (string-replace "_" "-" name) "--lib")))
-        ;; the case in esp-hal crate
-        (unless (eq 0 exitcode)
-          (erase-buffer)
-          (let ((default-directory pkg-dir))
-            (call-process crate-modules-program nil t nil "structure" "--package" pkg-dir "--lib"))))
-      (string-remove-prefix "\n" (buffer-string)))))
+    (condition-case nil
+        (with-temp-buffer
+          (let ((pkg-dir (string-replace "_" "-" name))
+                (exitcode (call-process crate-modules-program nil t nil "structure" "--package" (string-replace "_" "-" name) "--lib")))
+            ;; the case in esp-hal crate
+            (unless (eq 0 exitcode)
+              (erase-buffer)
+              (let ((default-directory pkg-dir))
+                (call-process crate-modules-program nil t nil "structure" "--package" pkg-dir "--lib")))
+            (string-remove-prefix "\n" (buffer-string))))
+      (error nil))))
 
 (defun insert-crate-structure ()
   "Insert the module structure tree for `crate-name' at point.
-Applies ANSI color escapes in the inserted region."
-  (let ((p (point)))
-    (insert (crate-structure crate-name))
-    (ansi-color-apply-on-region p (point))))
+Applies ANSI color escapes in the inserted region.  Does nothing
+if `crate-structure' returns nil."
+  (when-let* ((tree (crate-structure crate-name)))
+    (let ((p (point)))
+      (insert tree)
+      (ansi-color-apply-on-region p (point)))))
 
 
 ;;; Helpers
@@ -279,7 +282,7 @@ If the value is nil or :null, nothing is inserted after the label."
       (unless (eq it :null)
         (insert (number-to-string (floor it)))))
     (insert "\n\n")
-    ;; (insert-crate-structure)
+    (insert-crate-structure)
     ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
     (save-excursion
       (goto-char (point-min))

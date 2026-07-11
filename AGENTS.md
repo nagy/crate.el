@@ -257,7 +257,7 @@ against it in the `when-let*` binding, not in the body:
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
-| ansi-color | soft | used by `insert-crate-structure` for cargo-modules output |
+| ansi-color | yes | built-in, used by `insert-crate-structure` for cargo-modules output |
 
 ## TODO
 
