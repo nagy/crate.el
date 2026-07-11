@@ -149,6 +149,84 @@ if `crate-structure' returns nil."
       (ansi-color-apply-on-region p (point)))))
 
 
+;;; Doc Build
+
+(defcustom crate-doc-enable t
+  "When non-nil, enable on-demand rustdoc builds via Nix.
+When enabled, `crate-mode' can build and display full rustdoc
+documentation (module trees, type signatures, docstrings) by
+invoking `nix-build' on the companion crate-doc.nix file.
+When nil, only metadata and `cargo-modules' output are shown.
+
+Requires Nix and the nightly rustc toolchain (fetched
+automatically by the Nix expression)."
+  :type 'boolean
+  :group 'crate)
+
+(defvar crate-doc--cache (make-hash-table :test #'equal)
+  "Cache mapping crate names to parsed rustdoc JSON.
+Memoized — cleared by `crate-refresh-cache'.")
+
+(defun crate-doc--nix-path ()
+  "Return the absolute path to the companion crate-doc.nix file.
+Uses `locate-library' to find it relative to crate.el on
+`load-path'.  Returns nil if the file cannot be found."
+  (when-let* ((lib (locate-library "crate"))
+              (dir (file-name-directory lib))
+              (nix (expand-file-name "crate-doc.nix" dir)))
+    (when (file-exists-p nix)
+      nix)))
+
+(defun crate-doc--build (name)
+  "Build rustdoc JSON for crate NAME via nix-build.
+Returns the Nix store output path on success, or nil on failure.
+This call is synchronous — it blocks Emacs until the build
+completes."
+  (when-let* ((nix-path (crate-doc--nix-path)))
+    (with-temp-buffer
+      (let ((exitcode (call-process "nix-build" nil t nil
+                                    nix-path
+                                    "--argstr" "crateName" name)))
+        (when (eq 0 exitcode)
+          (goto-char (point-max))
+          (forward-line -1)
+          (let ((path (string-trim (buffer-substring (point) (point-max)))))
+            (when (and path (not (string-empty-p path)))
+              path)))))))
+
+(defun crate-doc--json (name)
+  "Return the parsed rustdoc JSON for crate NAME, or nil.
+Builds the JSON on-demand via `crate-doc--build' and caches the
+result.  Returns nil if docs cannot be built, the crate has no
+JSON output, or a prior build attempt already failed."
+  (when (and crate-doc-enable
+             (crate-list-json)
+             (gethash name (crate-list-json)))
+    (let ((cached (with-memoization (gethash name crate-doc--cache)
+                    ;; Return :failed sentinel so with-memoization
+                    ;; doesn't retry builds that already failed.
+                    (or (when-let* ((store-path (crate-doc--build name)))
+                          (let ((doc-dir (expand-file-name "share/doc" store-path)))
+                            (when (file-directory-p doc-dir)
+                              (let ((json-file
+                                     ;; Pick the crate's JSON, skip the driver's.
+                                     (car (cl-remove-if
+                                           (lambda (f)
+                                             (or (string-match-p "/crate_doc_driver\\.json$" f)
+                                                 (not (string-suffix-p ".json" f))))
+                                           (directory-files-recursively doc-dir "")))))
+                                (when json-file
+                                  (with-temp-buffer
+                                    (insert-file-contents json-file)
+                                    (goto-char (point-min))
+                                    (condition-case nil
+                                        (json-parse-buffer)
+                                      (error nil))))))))
+                        :failed))))
+      (unless (eq cached :failed)
+        cached))))
+
+
 ;;; Helpers
 
 (defun crate--description ()
@@ -337,7 +415,8 @@ the JSON file."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
         crate--keys-cache nil
-        crate-structure--cache (make-hash-table :test 'equal))
+        crate-structure--cache (make-hash-table :test 'equal)
+        crate-doc--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
 
 

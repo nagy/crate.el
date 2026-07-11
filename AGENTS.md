@@ -28,6 +28,7 @@ Files:
 
 - `crate.el` — main package
 - `ol-crate.el` — Org link support
+- `crate-doc.nix` — Nix expression for rustdoc JSON builds
 - `crate-tests.el` — ERT test suite
 - `default.nix` — Nix build
 
@@ -38,22 +39,24 @@ Files:
 2. defgroup / defcustom (including `crate--crates-io-url`
    `defconst`)
 3. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
-4. Helpers (`crate--description`)
-5. Faces (`defface` definitions, `crate-font-lock-keywords`)
-6. Major Mode (`crate-mode`, derived from `text-mode`, with
+4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--build`,
+   `crate-doc--json`)
+5. Helpers (`crate--description`)
+6. Faces (`defface` definitions, `crate-font-lock-keywords`)
+7. Major Mode (`crate-mode`, derived from `text-mode`, with
    `cl-labels` local helper)
-7. Completion (`crate--keys`, `crate--annotate`,
+8. Completion (`crate--keys`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
-8. Interactive Commands (`find-crate`, `crate-browse-url`,
+9. Interactive Commands (`find-crate`, `crate-browse-url`,
    `crate-install-browse-url-handler`)
-9. Bookmarks (`crate--bookmark-make-record-function`,
-   `crate-bookmark-jump`)
-10. Org Integration (deferred load of `ol-crate`)
-11. Marginalia (`crate--marginalia-annotator`, registered for
+10. Bookmarks (`crate--bookmark-make-record-function`,
+    `crate-bookmark-jump`)
+11. Org Integration (deferred load of `ol-crate`)
+12. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
-12. Embark (action keymap `crate-embark-map`, export function,
+13. Embark (action keymap `crate-embark-map`, export function,
     category registration)
-13. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+14. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
 
 ## Conventions
@@ -180,6 +183,23 @@ static file on disk, results never go stale.
   expensive-computation...)
 ```
 
+`with-memoization` evaluates its place with `or` — if the body
+returns nil, the computation re-runs every call.  For results
+where nil is a valid "don't recompute" outcome, use a sentinel:
+
+```elisp
+;; Wrong — retries on nil (e.g. failed build)
+(with-memoization (gethash name cache)
+  (crate-doc--build name))
+
+;; Correct — :failed caches the negative result
+(let ((cached (with-memoization (gethash name cache)
+                (or (crate-doc--build name)
+                    :failed))))
+  (unless (eq cached :failed)
+    cached))
+```
+
 ### Avoid `let-alist` on hash tables
 
 `let-alist` expands to `(cdr (assq …))` — it works only on alists.
@@ -257,6 +277,7 @@ against it in the `when-let*` binding, not in the body:
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
+| nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `crate-doc.nix` for on-demand rustdoc JSON |
 | ansi-color | yes | built-in, used by `insert-crate-structure` for cargo-modules output |
 
 ## TODO
@@ -266,3 +287,8 @@ against it in the `when-let*` binding, not in the body:
   Hook into `completion-at-point-functions` with a custom function
   that queries `crate--keys` for matching crate names.  Would make
   crate.el a genuine Rust developer tool.
+- **Render rustdoc JSON in `crate-mode`** — parse the module tree
+  from the JSON output of `crate-doc.nix` and display it in the
+  crate detail buffer, with a `[Build Docs]` button for crates
+  that haven't been built yet.  Replaces / augments the current
+  `cargo-modules` output.
