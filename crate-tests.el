@@ -418,5 +418,77 @@ Substituted at build time by default.nix.")
           (should (assoc "tokio" tabulated-list-entries)))
         (kill-buffer buf)))))
 
+
+;;; Doc build
+
+(ert-deftest crate-doc-module-tree-flat ()
+  "`crate-doc--module-tree' on a flat module (no children)."
+  (let* ((json (json-parse-string
+                "{ \"root\": 1,
+                   \"index\": {
+                     \"1\": { \"name\": \"my_crate\", \"inner\": {
+                       \"module\": { \"is_crate\": true, \"items\": [2,3] }}},
+                     \"2\": { \"name\": \"foo\", \"inner\": {
+                       \"struct\": {} }},
+                     \"3\": { \"name\": \"bar\", \"inner\": {
+                       \"function\": {} }}
+                   }}"))
+         (tree (crate-doc--module-tree json)))
+    (should (= (length tree) 2))
+    (should (equal (mapcar #'car tree) '("foo" "bar")))
+    (should (equal (mapcar #'cadr tree) '(struct function)))
+    (should (equal (mapcar (lambda (x) (caddr x)) tree) '(nil nil)))))
+
+(ert-deftest crate-doc-module-tree-nested ()
+  "`crate-doc--module-tree' on nested modules."
+  (let* ((json (json-parse-string
+                "{ \"root\": 0,
+                   \"index\": {
+                     \"0\": { \"name\": \"root\", \"inner\": {
+                       \"module\": { \"is_crate\": true, \"items\": [1] }}},
+                     \"1\": { \"name\": \"submod\", \"inner\": {
+                       \"module\": { \"is_crate\": false, \"items\": [2,3] }}},
+                     \"2\": { \"name\": \"Foo\", \"inner\": {
+                       \"struct\": {} }},
+                     \"3\": { \"name\": \"Bar\", \"inner\": {
+                       \"trait\": {} }}
+                   }}"))
+         (tree (crate-doc--module-tree json)))
+    (should (= (length tree) 1))
+    (let ((submod (car tree)))
+      (should (equal (car submod) "submod"))
+      (should (eq (cadr submod) 'module))
+      (let ((children (caddr submod)))
+        (should (equal (length children) 2))
+        (should (equal (car (car children)) "Foo"))
+        (should (equal (car (cadr children)) "Bar"))))))
+
+(ert-deftest crate-doc-module-tree-null-name ()
+  "Null-named items (use imports) are present in the tree;
+callers must filter them by checking for :null."
+  (let* ((json (json-parse-string
+                "{ \"root\": 0,
+                   \"index\": {
+                     \"0\": { \"name\": \"root\", \"inner\": {
+                       \"module\": { \"is_crate\": true, \"items\": [1,2] }}},
+                     \"1\": { \"name\": null, \"inner\": {
+                       \"use\": {} }},
+                     \"2\": { \"name\": \"Thing\", \"inner\": {
+                       \"enum\": {} }}
+                   }}"))
+         (tree (crate-doc--module-tree json)))
+    (should (= (length tree) 2))
+    (should (eq :null (car (car tree))))
+    (should (equal (car (cadr tree)) "Thing"))))
+
+(ert-deftest crate-doc-module-tree-empty ()
+  "`crate-doc--module-tree' returns nil when JSON lacks a root or index."
+  (let ((empty-json (make-hash-table :test 'equal)))
+    (should-not (crate-doc--module-tree empty-json)))
+  (let* ((json (make-hash-table :test 'equal)))
+    (puthash "root" 1 json)
+    (puthash "index" (make-hash-table :test 'equal) json)
+    (should-not (crate-doc--module-tree json))))
+
 (provide 'crate-tests)
 ;;; crate-tests.el ends here

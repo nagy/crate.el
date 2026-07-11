@@ -226,6 +226,47 @@ JSON output, or a prior build attempt already failed."
       (unless (eq cached :failed)
         cached))))
 
+(defun crate-doc--module-tree (json)
+  "Return the module tree from rustdoc JSON.
+JSON is a hash table as returned by `json-parse-buffer' from a
+rustdoc JSON file.  Returns a nested list:
+
+  ((NAME KIND (CHILDREN...)) ...)
+
+where children have the same structure.  KIND is a symbol:
+`module', `struct', `trait', `function', `macro', `enum', etc.
+Items without a module tree (non-modules) have nil as children."
+  (declare (pure t) (side-effect-free t))
+  (when-let* ((root-id (gethash "root" json))
+              (index (gethash "index" json))
+              (root-num (if (integerp root-id) root-id
+                          (string-to-number root-id)))
+              (root-str (number-to-string root-num))
+              (root-item (gethash root-str index)))
+    (cl-labels ((walk (id-str)
+                  (let* ((item (gethash id-str index))
+                         (name (gethash "name" item))
+                         (inner (gethash "inner" item))
+                         (kind (and inner
+                                    (let ((keys (hash-table-keys inner)))
+                                      (when keys
+                                        (intern (car keys))))))
+                         (children
+                          (when (and inner (eq kind 'module))
+                            (when-let* ((mod (gethash "module" inner))
+                                        (ids (gethash "items" mod)))
+                              (mapcar (lambda (id)
+                                        (walk (if (integerp id)
+                                                  (number-to-string id)
+                                                (number-to-string (floor id)))))
+                                      ids)))))
+                    (list name kind children))))
+      (mapcar (lambda (id)
+                (walk (if (integerp id)
+                          (number-to-string id)
+                        (number-to-string (floor id)))))
+              (gethash "items" (gethash "module" (gethash "inner" root-item)))))))
+
 
 ;;; Helpers
 
@@ -546,6 +587,7 @@ When nil, all crates are shown.")
 
 (defun crate-browse--entry (name data)
   "Return a `tabulated-list' entry for crate NAME with DATA."
+  (declare (pure t) (side-effect-free t))
   (let ((desc (gethash "description" data)))
     (list name
           (vector (propertize name 'face 'crate-name-face)
