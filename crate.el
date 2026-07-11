@@ -57,7 +57,6 @@
 (require 'ansi-color)
 
 
-(defvar url-knowledge-url nil)
 (defvar browse-url-default-handlers nil)
 
 (defvar-local crate-name nil)
@@ -234,7 +233,6 @@ This mode is not intended to be invoked directly; use
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'ignore)
-  (setq-local url-knowledge-url (concat crate--crates-io-url crate-name))
   (setq-local list-buffers-directory (gethash "description" crate-data))
   (cl-labels
       ((field (label key)
