@@ -54,7 +54,7 @@
 (require 'bookmark)
 (require 'json)
 (require 'cl-lib)
-(require 'ansi-color)
+
 
 
 (defvar browse-url-default-handlers nil)
@@ -79,14 +79,6 @@ crate name and each value is an object with fields like
   :type 'file
   :group 'crate)
 
-(defcustom crate-modules-program "cargo-modules"
-  "Name or path of the `cargo-modules' executable.
-
-Used to generate crate module structure trees via
-`cargo modules structure'.  Set to nil to disable."
-  :type 'string
-  :risky t
-  :group 'crate)
 
 (defconst crate--crates-io-url "https://crates.io/crates/"
   "Base URL for crates.io crate pages.")
@@ -119,35 +111,6 @@ file is missing or cannot be parsed.  Results are memoized via
             table)
         (error nil)))))
 
-(defvar crate-structure--cache (make-hash-table :test #'equal))
-
-(defun crate-structure (name)
-  "Return the module structure tree for the crate NAME.
-Invokes `crate-modules-program' to generate an ANSI-colored
-tree.  Results are memoized per crate name via
-`with-memoization'.  Returns nil on failure."
-  (with-memoization (gethash name crate-structure--cache)
-    (condition-case nil
-        (with-temp-buffer
-          (let ((pkg-dir (string-replace "_" "-" name))
-                (exitcode (call-process crate-modules-program nil t nil "structure" "--package" (string-replace "_" "-" name) "--lib")))
-            ;; the case in esp-hal crate
-            (unless (eq 0 exitcode)
-              (erase-buffer)
-              (let ((default-directory pkg-dir))
-                (call-process crate-modules-program nil t nil "structure" "--package" pkg-dir "--lib")))
-            (string-remove-prefix "\n" (buffer-string))))
-      (error nil))))
-
-(defun insert-crate-structure ()
-  "Insert the module structure tree for `crate-name' at point.
-Applies ANSI color escapes in the inserted region.  Does nothing
-if `crate-structure' returns nil."
-  (when-let* ((tree (crate-structure crate-name)))
-    (let ((p (point)))
-      (insert tree)
-      (ansi-color-apply-on-region p (point)))))
-
 
 ;;; Doc Build
 
@@ -156,7 +119,7 @@ if `crate-structure' returns nil."
 When enabled, `crate-mode' can build and display full rustdoc
 documentation (module trees, type signatures, docstrings) by
 invoking `nix-build' on the companion crate-doc.nix file.
-When nil, only metadata and `cargo-modules' output are shown.
+When nil, no module tree is shown.
 
 Requires Nix and the nightly rustc toolchain (fetched
 automatically by the Nix expression)."
@@ -209,7 +172,7 @@ JSON output, or a prior build attempt already failed."
                           (let ((doc-dir (expand-file-name "share/doc" store-path)))
                             (when (file-directory-p doc-dir)
                               (let ((json-file
-                                     ;; Pick the crate's JSON, skip the driver's.
+                                     ;; Pick the crate's JSON (non-driver).
                                      (car (cl-remove-if
                                            (lambda (f)
                                              (or (string-match-p "/crate_doc_driver\\.json$" f)
@@ -361,7 +324,18 @@ If the value is nil or :null, nothing is inserted after the label."
          (let ((val (gethash key crate-data)))
            (unless (or (null val) (eq val :null))
              (insert val)))
-         (insert "\n")))
+         (insert "\n"))
+       (insert-doc-tree (items level)
+         "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation."
+         (dolist (item items)
+           (let ((name (car item))
+                 (_kind (cadr item))
+                 (children (caddr item)))
+             (unless (eq name :null)
+               (insert (make-string (* level 2) ?\s)
+                       "- " name "\n"))
+             (when children
+               (insert-doc-tree children (1+ level)))))))
     (insert "Name:          ")
     (insert (or (gethash "name" crate-data) crate-name) "\n")
     (insert "Description:   ")
@@ -399,7 +373,10 @@ If the value is nil or :null, nothing is inserted after the label."
       (unless (eq it :null)
         (insert (number-to-string (floor it)))))
     (insert "\n\n")
-    (insert-crate-structure)
+    ;; Module structure from rustdoc JSON.
+    (when-let* ((doc-json (crate-doc--json crate-name)))
+      (insert "Modules:\n")
+      (insert-doc-tree (crate-doc--module-tree doc-json) 0))
     ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
     (save-excursion
       (goto-char (point-min))
@@ -456,7 +433,6 @@ the JSON file."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
         crate--keys-cache nil
-        crate-structure--cache (make-hash-table :test 'equal)
         crate-doc--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
 

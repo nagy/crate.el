@@ -40,7 +40,7 @@ Files:
    `defconst`)
 3. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
 4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--build`,
-   `crate-doc--json`)
+   `crate-doc--json`, `crate-doc--module-tree`)
 5. Helpers (`crate--description`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
 7. Major Mode (`crate-mode`, derived from `text-mode`, with
@@ -137,20 +137,6 @@ binding.
 (let* ((data (gethash key hash))
        (desc (gethash "description" data)))
   ...)
-```
-
-### `:risky t` for external programs
-
-`defcustom` options that point to external executables (like
-`crate-modules-program`) should get `:risky t` to avoid Emacs
-prompting for confirmation:
-
-```elisp
-(defcustom crate-modules-program "cargo-modules"
-  "..."
-  :type 'string
-  :risky t
-  :group 'crate)
 ```
 
 ### `defconst` for shared strings
@@ -278,7 +264,6 @@ against it in the `when-let*` binding, not in the body:
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `crate-doc.nix` for on-demand rustdoc JSON |
-| ansi-color | yes | built-in, used by `insert-crate-structure` for cargo-modules output |
 
 ## TODO
 
@@ -289,6 +274,4 @@ against it in the `when-let*` binding, not in the body:
   crate.el a genuine Rust developer tool.
 - **Render rustdoc JSON in `crate-mode`** — parse the module tree
   from the JSON output of `crate-doc.nix` and display it in the
-  crate detail buffer, with a `[Build Docs]` button for crates
-  that haven't been built yet.  Replaces / augments the current
-  `cargo-modules` output.
+  crate detail buffer.  Done.

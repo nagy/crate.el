@@ -51,9 +51,6 @@ melpaBuild {
   postPatch = ''
     substituteInPlace crate-tests.el \
       --replace-fail '@testCratesJson@' ${testCratesJson}
-    substituteInPlace crate.el \
-      --replace-fail 'crate-modules-program "cargo-modules"' \
-      'crate-modules-program "${pkgs.cargo-modules}/bin/cargo-modules"'
   '';
 
   checkPhase = ''
