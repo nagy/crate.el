@@ -1,0 +1,33 @@
+#+title: crate.el - Browse Rust crates in Emacs
+#+author: Daniel Nagy
+#+language: en
+
+[[https://github.com/nagy/crate.el/raw/screenshot/emacs-screenshot.svg]]
+
+crate.el provides an interactive =completing-read= interface for
+browsing Rust crates from a local =static.crates.io= JSON dump.
+Optional on-demand rustdoc builds via Nix for module tree display.
+
+* Features
+
+- =M-x find-crate= with completion, Marginalia annotations, and Embark actions
+- =M-x crate-browse-crates= tabulated list view with sorting and bookmarks
+- Redirect crates.io URLs to =find-crate= via =browse-url= handler
+- Org link type: =crate:=
+- Module tree display from rustdoc JSON (optional, requires Nix)
+- Bookmark support for both detail and browse buffers
+
+* Usage
+
+Set =crate-data-path= to the location of your JSON dump, then use
+=M-x find-crate= to look up a Rust crate.
+
+To enable the browse URL handler:
+
+#+begin_src elisp
+  (crate-install-browse-url-handler)
+#+end_src
+
+* License
+
+[[./LICENSE][AGPL3+]]

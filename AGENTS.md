@@ -32,7 +32,9 @@ Files:
 - `crate-tests.el` — ERT test suite
 - `default.nix` — Nix build
 - `emacs-screenshot.nix` — Nix expression for screenshot generation
+- `README.org` — project README with screenshot
 - `CONTEXT.md` — domain glossary
+- `LICENSE` — AGPLv3
 - `docs/adr/` — architectural decision records
 
 ### Rustdoc JSON pipeline
