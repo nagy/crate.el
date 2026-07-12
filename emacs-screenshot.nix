@@ -1,4 +1,8 @@
-{ pkgs ? import <nixpkgs> { }, lib ? pkgs.lib, emacs ? pkgs.emacs }:
+{
+  pkgs ? import <nixpkgs> { },
+  lib ? pkgs.lib,
+  emacs ? pkgs.emacs,
+}:
 
 let
   crateEl = pkgs.callPackage ./default.nix { inherit emacs; };
@@ -23,17 +27,22 @@ let
 in
 rec {
   mkEmacsScreenshot =
-    { emacsCode ? ""
-    , name ? "emacs-screenshot.png"
-    , emacs ? pkgs.emacs
-    , light ? true
+    {
+      emacsCode ? "",
+      name ? "emacs-screenshot.png",
+      emacs ? pkgs.emacs,
+      light ? true,
     }:
     pkgs.runCommandLocal name
       {
         NIX_PATH = "nixpkgs=${pkgs.path}";
         NIX_STATE_DIR = "/build/nix-state";
         nativeBuildInputs = [
-          (emacs.pkgs.withPackages (epkgs: [ epkgs.modus-themes epkgs.marginalia crateEl ]))
+          (emacs.pkgs.withPackages (epkgs: [
+            epkgs.modus-themes
+            epkgs.marginalia
+            crateEl
+          ]))
           pkgs.xvfb-run
           pkgs.iosevka
         ];
@@ -68,7 +77,9 @@ rec {
       '';
 
   crateScreenshot =
-    { light ? true }:
+    {
+      light ? true,
+    }:
     mkEmacsScreenshot {
       inherit light;
       emacsCode = ''
@@ -144,9 +155,21 @@ rec {
           --subst-var darkThemeB64
       '';
 
-  png = finalizePng (crateScreenshot { light = true; });
+  png = finalizePng (crateScreenshot {
+    light = true;
+  });
 
-  svg = svgDualTheme
-    (finalizePng (crateScreenshot { light = true; }))
-    (finalizePng (crateScreenshot { light = false; }));
+  svg =
+    svgDualTheme
+      (finalizePng (crateScreenshot {
+        light = true;
+      }))
+      (
+        finalizePng (crateScreenshot {
+          light = false;
+        })
+      );
+
+  gitrepo = pkgs.nur.repos.nagy.lib.mkGitRepository svg;
+
 }
