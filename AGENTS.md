@@ -31,6 +31,7 @@ Files:
 - `crate-doc.nix` — Nix expression for rustdoc JSON builds
 - `crate-tests.el` — ERT test suite
 - `default.nix` — Nix build
+- `emacs-screenshot.nix` — Nix expression for screenshot generation
 - `CONTEXT.md` — domain glossary
 - `docs/adr/` — architectural decision records
 
@@ -80,17 +81,17 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `cl-labels` local helper)
 8. Completion (`crate--keys`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
-9. Interactive Commands (`find-crate`, `crate-browse-url`,
-   `crate-install-browse-url-handler`)
-10. Bookmarks (`crate--bookmark-make-record-function`,
-    `crate-bookmark-jump`)
-11. Org Integration (deferred load of `ol-crate`)
-12. Marginalia (`crate--marginalia-annotator`, registered for
+9. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
-13. Embark (action keymap `crate-embark-map`, export function,
-    category registration)
-14. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+10. Interactive Commands (`find-crate`, `crate-browse-url`,
+    `crate-install-browse-url-handler`)
+11. Bookmarks (`crate--bookmark-make-record-function`,
+    `crate-bookmark-jump`)
+12. Org Integration (deferred load of `ol-crate`)
+13. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
+14. Embark (action keymap `crate-embark-map`, export function,
+    category registration)
 
 ## Conventions
 
@@ -171,8 +172,6 @@ binding.
        (desc (gethash "description" data)))
   ...)
 ```
-
-### `defconst` for shared strings
 
 ### `declare` for pure functions
 
@@ -259,9 +258,9 @@ left-to-right, skipping undefined faces.
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via
-`(with-eval-after-load 'org (require 'ol-crate))`.  The store
-function (`crate--org-store-link`) is defined in `ol-crate.el`
-with `declare-function` and `defvar` for cross-file references.
+`(with-eval-after-load 'org (require 'ol-crate))`.  Cross-file
+references to functions and variables from `crate.el` use
+`declare-function` and `defvar` in `ol-crate.el`.
 
 ### Null guard in `when-let*` conditions
 
@@ -290,7 +289,7 @@ against it in the `when-let*` binding, not in the body:
   crate name, suitable as the return value of `crate-list-json`.
 - `crate-test--with-crate` macro binds `crate-name` and `crate-data`
   for testing functions that read those buffer-local variables.
-- Mock `find-crate`, `crate-mode`, `switch-to-buffer`, and
+- Mock `find-crate`, `switch-to-buffer`, and
   `org-link-store-props` with `cl-letf` on `symbol-function`.
 - Hash tables with identical content are not `equal` in Elisp —
   compare individual `gethash` values instead.

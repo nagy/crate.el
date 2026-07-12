@@ -382,7 +382,8 @@ Substituted at build time by default.nix.")
   "End-to-end: `find-crate' displays serde detail buffer."
   (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate-data-path crate-test--data-file))
+        (crate-data-path crate-test--data-file)
+        (crate-doc-enable nil))    ; skip nix-build in sandbox
     (cl-letf (((symbol-function 'pop-to-buffer) #'ignore)
               ((symbol-function 'cd) #'ignore)
               ((symbol-function 'url-knowledge-url) nil))

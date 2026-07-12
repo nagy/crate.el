@@ -53,6 +53,7 @@ rec {
           (menu-bar-mode -1)
           (tool-bar-mode -1)
           (toggle-scroll-bar -1)
+          (fringe-mode 0)
           (message nil)                            ; clear out echo area
           (defun screenshot-capture ()
             "Export the selected frame as PNG and exit."
@@ -67,11 +68,11 @@ rec {
       ''
         mkdir -p "$NIX_STATE_DIR"
         HOME=$PWD \
-          xvfb-run --server-args="-screen 0 1024x576x24" \
+          xvfb-run --server-args="-screen 0 1920x1080x24" \
             emacs --quick --eval="(defalias (quote display-warning) (quote ignore))" \
             -f package-initialize --fullscreen \
             -l modus-themes \
-            --font Iosevka\ 18 \
+            --font Iosevka\ 30 \
             -l $screenshotScript \
             -l $emacsCodeFile
       '';
@@ -131,7 +132,7 @@ rec {
         template = pkgs.writeText "template.svg" ''
           <?xml version="1.0" encoding="utf-8"?>
           <svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
-               viewBox="0 0 1024 576" xml:space="preserve">
+               viewBox="0 0 1920 1080" xml:space="preserve">
             <defs>
               <style type="text/css">
                   image.light { display: inherit; }
@@ -142,8 +143,8 @@ rec {
                   }
               </style>
             </defs>
-            <image class="light" height="576" width="1024" href="data:image/png;base64,@lightThemeB64@" ></image>
-            <image class="dark" height="576" width="1024" href="data:image/png;base64,@darkThemeB64@" ></image>
+            <image class="light" height="1080" width="1920" href="data:image/png;base64,@lightThemeB64@" ></image>
+            <image class="dark" height="1080" width="1920" href="data:image/png;base64,@darkThemeB64@" ></image>
           </svg>
         '';
       }
