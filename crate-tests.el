@@ -99,9 +99,9 @@ record, not the top-level crate table)."
           (let ((content (buffer-string)))
             ;; Homepage has a value.
             (should (string-match-p "Homepage:.*example.com" content))
-            ;; Documentation is :null → docs.rs fallback link.
+            ;; Documentation is :null � docs.rs fallback link.
             (should (string-match-p "docs\\.rs/test-crate" content))
-            ;; Updated has no key → label only.
+            ;; Updated has no key � label only.
             (should (string-match-p "Updated: *\n" content))))))))
 
 
@@ -342,18 +342,57 @@ record, not the top-level crate table)."
     (should-error (crate-browse--current-name) :type 'user-error)))
 
 (ert-deftest crate-browse-bookmark-make-record ()
-  "Browse bookmark record includes name-list and prefix."
+  "Browse bookmark stores name-prefix for live re-derivation, no frozen name-list."
   (with-temp-buffer
     (crate-browse-mode)
-    (setq-local crate-browse--name-list '("htop" "neovim"))
-    (setq-local crate-browse--name-prefix "search-term")
-    (setq-local tabulated-list-entries
-                (list (list "htop" ["htop" ""]) (list "neovim" ["neovim" ""])))
+    (setq-local crate-browse--name-prefix "serde")
     (let ((rec (crate-browse--bookmark-make-record)))
-      (should (string-match-p "search-term" (car rec)))
-      (should (equal (alist-get 'name-list rec) '("htop" "neovim")))
-      (should (equal (alist-get 'name-prefix rec) "search-term"))
+      (should (string-match-p "serde" (car rec)))
+      (should-not (alist-get 'name-list rec))
+      (should (equal (alist-get 'name-prefix rec) "serde"))
       (should (eq (alist-get 'handler rec) 'crate-browse--bookmark-jump)))))
+
+(ert-deftest crate-browse-bookmark-make-record-no-prefix ()
+  "Browse bookmark with nil name-prefix shows \"all\"."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq-local crate-browse--name-prefix nil)
+    (let ((rec (crate-browse--bookmark-make-record)))
+      (should (string-match-p "all" (car rec)))
+      (should-not (alist-get 'name-list rec))
+      (should-not (alist-get 'name-prefix rec))
+      (should (eq (alist-get 'handler rec) 'crate-browse--bookmark-jump)))))
+
+(ert-deftest crate-browse-bookmark-jump-with-prefix ()
+  "`crate-browse--bookmark-jump' re-derives name-list from live cache."
+  (let ((called-names nil) (called-prefix :sentinel)
+        (table (make-hash-table :test 'equal))
+        (crate--data-cache (make-hash-table :test 'equal)))
+    ;; Populate cache with matching and non-matching crates.
+    (puthash "serde" (crate-test--data-hash :name "serde") table)
+    (puthash "serde_derive" (crate-test--data-hash :name "serde_derive") table)
+    (puthash "tokio" (crate-test--data-hash :name "tokio") table)
+    (puthash 'data table crate--data-cache)
+    (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer)
+              ((symbol-function 'crate-browse-crates)
+               (lambda (&optional name-list name-prefix)
+                 (setq called-names name-list called-prefix name-prefix))))
+      (crate-browse--bookmark-jump '((name-prefix . "serde")
+                                     (handler . crate-browse--bookmark-jump)))
+      (should (equal (sort called-names #'string<) '("serde" "serde_derive")))
+      (should (equal called-prefix "serde")))))
+
+(ert-deftest crate-browse-bookmark-jump-no-prefix ()
+  "`crate-browse--bookmark-jump' with nil prefix opens full table."
+  (let ((called-names nil) (called-prefix :sentinel))
+    (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer)
+              ((symbol-function 'crate-browse-crates)
+               (lambda (&optional name-list name-prefix)
+                 (setq called-names name-list called-prefix name-prefix))))
+      (crate-browse--bookmark-jump '((name-prefix . nil)
+                                     (handler . crate-browse--bookmark-jump)))
+      (should-not called-names)
+      (should-not called-prefix))))
 
 
 ;;; End-to-end tests with test data

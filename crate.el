@@ -578,9 +578,11 @@ and delegates to `find-crate'."
 (defvar-local crate-browse--name-list nil
   "Buffer-local list of crate names that the browse buffer is filtered to.
 When nil, all crates are shown.")
+(put 'crate-browse--name-list 'permanent-local t)
 
 (defvar-local crate-browse--name-prefix nil
   "Buffer-local search term used for naming the browse buffer.")
+(put 'crate-browse--name-prefix 'permanent-local t)
 
 (defun crate-browse--entry (name data)
   "Return a `tabulated-list' entry for crate NAME with DATA."
@@ -634,19 +636,32 @@ appear in the list."
         (crate-browse--entries crate-browse--name-list))
   (tabulated-list-print t))
 
+(defun crate--filter-by-prefix (name-prefix)
+  "Return a list of crate names from the live cache matching NAME-PREFIX."
+  (let ((names nil)
+        (items (crate-list-json)))
+    (when items
+      (maphash (lambda (name _data)
+                 (when (string-match-p (regexp-quote name-prefix) name)
+                   (push name names)))
+               items)
+      (nreverse names))))
+
 (defun crate-browse--bookmark-make-record ()
   "Create a bookmark record for the current browse buffer."
   `(,(format "Crates: %s"
-             (or crate-browse--name-prefix
-                 (format "%d items" (length tabulated-list-entries))))
-    (name-list . ,crate-browse--name-list)
+             (or crate-browse--name-prefix "all"))
     (name-prefix . ,crate-browse--name-prefix)
     (handler . crate-browse--bookmark-jump)))
 
 (defun crate-browse--bookmark-jump (bookmark)
-  "Restore a crate browse BOOKMARK."
-  (let ((name-list (alist-get 'name-list bookmark))
-        (name-prefix (alist-get 'name-prefix bookmark)))
+  "Restore a crate browse BOOKMARK.
+Re-derives the filtered name-list from the live cache so newly
+added crates appear on reopen."
+  (let ((name-prefix (alist-get 'name-prefix bookmark))
+        name-list)
+    (when name-prefix
+      (setq name-list (crate--filter-by-prefix name-prefix)))
     (crate-browse-crates name-list name-prefix)))
 
 ;;;###autoload
@@ -682,8 +697,13 @@ coexist in separate buffers."
 
 (defun crate--embark-export (candidates)
   "Embark export function for crate CANDIDATES.
-Opens a `crate-browse-mode' buffer filtered to CANDIDATES."
-  (crate-browse-crates candidates))
+Opens a `crate-browse-mode' buffer filtered to CANDIDATES.
+Grabs the minibuffer search term as the name-prefix so bookmarks
+can re-derive results from the live cache."
+  (let ((name-prefix (when (minibufferp)
+                       (let ((s (minibuffer-contents)))
+                         (and (not (string-empty-p s)) s)))))
+    (crate-browse-crates candidates name-prefix)))
 
 (defun crate--embark-browse-url (cand)
   "Open CAND on crates.io."
