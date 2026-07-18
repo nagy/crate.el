@@ -57,7 +57,7 @@
 
 
 
-(defvar browse-url-default-handlers nil)
+(defvar browse-url-default-handlers)
 
 (defvar-local crate-name nil)
 (put 'crate-name 'permanent-local t)
@@ -88,28 +88,54 @@ crate name and each value is an object with fields like
   :type 'integer
   :group 'crate)
 
+
+(defun crate--canonical-name (name)
+  "Return the canonical form of crate NAME.
+Downcases and replaces hyphens with underscores for consistent
+lookup in `crate--data-cache'."
+  (declare (pure t) (side-effect-free t))
+  (downcase (string-replace "-" "_" name)))
+
+
+(defcustom crate-repository-directory nil
+  "Directory for local crate repository checkouts.
+If non-nil and the crate has a repository URL, `crate-mode' sets
+`default-directory' to a local checkout directory derived from
+the URL.  Can be a string (a directory path under which repo
+directories live) or a function that receives the repository URL
+and returns a directory path."
+  :type '(choice (const :tag "Off" nil)
+                 (directory :tag "Base directory")
+                 (function :tag "Mapping function"))
+  :group 'crate)
+
 ;;; Cache
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
 
 (defun crate-list-json ()
   "Load the crate JSON dump from `crate-data-path'.
-Returns a hash table keyed by lowercase crate name, or nil if the
-file is missing or cannot be parsed.  Results are memoized via
-`with-memoization'."
-  (with-memoization (gethash 'data crate--data-cache)
-    (when (and crate-data-path (file-exists-p crate-data-path))
-      (condition-case nil
-          (let ((raw (with-temp-buffer
-                       (insert-file-contents crate-data-path)
-                       (goto-char (point-min))
-                       (json-parse-buffer)))
-                (table (make-hash-table :test 'equal)))
-            (maphash (lambda (key val)
-                       (puthash (downcase key) val table))
-                     raw)
-            table)
-        (error nil)))))
+Returns a hash table keyed by canonical crate name, or nil if
+the file is missing or cannot be parsed.  Results are memoized
+via `with-memoization'; a :failed sentinel prevents retrying
+a corrupt or missing file on every subsequent call."
+  (let ((cached (with-memoization (gethash 'data crate--data-cache)
+                  (if (and crate-data-path (file-exists-p crate-data-path))
+                      (condition-case nil
+                          (let ((raw (with-temp-buffer
+                                       (insert-file-contents crate-data-path)
+                                       (goto-char (point-min))
+                                       (json-parse-buffer)))
+                                (table (make-hash-table :test #'equal)))
+                            (maphash (lambda (key val)
+                                       (puthash (crate--canonical-name key)
+                                                val table))
+                                     raw)
+                            table)
+                        (error :failed))
+                    :failed))))
+    (unless (eq cached :failed)
+      cached)))
 
 
 ;;; Doc Build
@@ -147,7 +173,7 @@ This call is synchronous — it blocks Emacs until the build
 completes."
   (when-let* ((nix-path (crate-doc--nix-path)))
     (with-temp-buffer
-      (let ((exitcode (call-process "nix-build" nil t nil
+      (let ((exitcode (call-process "nix-build" nil (list t nil) nil
                                     nix-path
                                     "--argstr" "crateName" name)))
         (when (eq 0 exitcode)
@@ -324,11 +350,11 @@ Inherits from `package-description' when available."
 \\{crate-mode-map}
 This mode is not intended to be invoked directly; use
 `find-crate' instead."
-  (cd temporary-file-directory)
+  (setq-local default-directory temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'ignore)
-  (setq-local list-buffers-directory (gethash "description" crate-data))
+  (setq-local list-buffers-directory (crate--description))
   (cl-labels
       ((field (label key)
          "Insert LABEL, then the value of KEY from `crate-data'.
@@ -363,16 +389,22 @@ Each item is (NAME KIND CHILDREN DOC)."
     (insert (crate--description))
     (insert "\n")
     (field "Homepage:      " "homepage")
-    ;; Repository (special: may cd into local checkout)
+    ;; Repository
     (insert "Repository:    ")
-    (when-let* ((it (gethash "repository" crate-data)))
-      (unless (eq it :null)
-        (insert (propertize it 'mouse-face 'highlight))
-        (let ((filename (format "/mnt/archive/%s.git.sqfs/"
-                                (string-replace "/" "__"
-                                                (string-remove-prefix "https://" it)))))
-          (when (file-exists-p filename)
-            (cd filename)))))
+    (when-let* ((repo (gethash "repository" crate-data))
+                ((not (eq repo :null))))
+      (insert (propertize repo 'mouse-face 'highlight))
+      (when crate-repository-directory
+        (let ((dir (cond
+                    ((functionp crate-repository-directory)
+                     (funcall crate-repository-directory repo))
+                    ((stringp crate-repository-directory)
+                     (expand-file-name
+                      (string-replace "/" "__"
+                                      (string-remove-prefix "https://" repo))
+                      crate-repository-directory)))))
+          (when (and dir (file-exists-p dir))
+            (setq-local default-directory dir)))))
     (insert "\n")
     ;; Documentation (with docs.rs fallback)
     (insert (propertize "Documentation: " 'face 'crate-field-label))
@@ -468,10 +500,10 @@ Shows the crate description."
               ((not (eq desc :null))))
     desc))
 
-(defvar marginalia-annotator-registry nil)
+(defvar marginalia-annotators)
 
 (with-eval-after-load 'marginalia
-  (add-to-list 'marginalia-annotator-registry
+  (add-to-list 'marginalia-annotators
                '(crate crate--marginalia-annotator builtin none)))
 
 
@@ -487,21 +519,21 @@ or switches to an existing one."
   (interactive)
   (let ((cand (or name
                   (completing-read "crate> " #'crate--collection))))
+    ;; Strip crates.io URL prefix and any trailing version path.
     (when (string-prefix-p crate--crates-io-url cand)
-      (setq cand (string-remove-prefix crate--crates-io-url cand)))
-    (setq cand (downcase (string-replace "-" "_" cand)))
-    (let ((bufname (format "Crate: %s" cand)))
-      (if (get-buffer bufname)
-          (switch-to-buffer bufname)
+      (setq cand (string-remove-prefix crate--crates-io-url cand))
+      (when-let* ((slash (string-search "/" cand)))
+        (setq cand (substring cand 0 slash))))
+    (setq cand (crate--canonical-name cand))
+    (let* ((data (crate-list-json))
+           (entry (when data (gethash cand data))))
+      (unless entry
+        (user-error "Crate `%s' not found" cand))
+      (let ((bufname (format "Crate: %s" cand)))
         (switch-to-buffer bufname)
         (setq-local crate-name cand)
-        (setq-local crate-data
-                    (when-let* ((data (crate-list-json)))
-                      (or (gethash crate-name data)
-                          (gethash (string-replace "_" "-" crate-name) data))))
-        (if crate-data
-            (crate-mode)
-          (user-error "Crate `%s' not found" cand))))))
+        (setq-local crate-data entry)
+        (crate-mode)))))
 
 
 ;;;###autoload
@@ -586,7 +618,7 @@ When nil, all crates are shown.")
 
 (defun crate-browse--entry (name data)
   "Return a `tabulated-list' entry for crate NAME with DATA."
-  (declare (pure t) (side-effect-free t))
+  (declare (side-effect-free t))
   (let ((desc (gethash "description" data)))
     (list name
           (vector (propertize name 'face 'crate-name-face)
@@ -691,9 +723,9 @@ coexist in separate buffers."
 
 ;;; Embark
 
-(defvar embark-exporters-alist nil)
-(defvar embark-keymap-alist nil)
-(defvar embark-general-map nil)
+(defvar embark-exporters-alist)
+(defvar embark-keymap-alist)
+(defvar embark-general-map)
 
 (defun crate--embark-export (candidates)
   "Embark export function for crate CANDIDATES.
@@ -709,14 +741,13 @@ can re-derive results from the live cache."
   "Open CAND on crates.io."
   (browse-url (concat crate--crates-io-url cand)))
 
-(defvar-keymap crate-embark-map
-  :doc "Embark actions for crate candidates."
-  :parent embark-general-map
-  "RET" #'find-crate
-  "b"   #'crate--embark-browse-url
-  "i"   #'insert)
-
 (with-eval-after-load 'embark
+  (defvar-keymap crate-embark-map
+    :doc "Embark actions for crate candidates."
+    :parent embark-general-map
+    "RET" #'find-crate
+    "b"   #'crate--embark-browse-url
+    "i"   #'insert)
   (add-to-list 'embark-exporters-alist
                '(crate . crate--embark-export))
   (add-to-list 'embark-keymap-alist

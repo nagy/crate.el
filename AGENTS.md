@@ -99,10 +99,11 @@ is nil. Callers must use `(cadddr item)` to get docs:
 
 ### Byte-compiler silencing
 
-External vars/faces from optional deps are declared with
-`(defvar <var> nil)` with an explicit `nil` value.  Cross-file
-function refs use `declare-function`.  Required deps get
-`(require 'package)`.
+External vars/faces from optional deps are declared with a
+value-less `(defvar <var>)` to silence the byte-compiler without
+clobbering the real default value (which would be lost if the
+package loads before the dependency).  Cross-file function refs
+use `declare-function`.  Required deps get `(require 'package)`.
 
 ### `cl-labels` for mode-local helpers
 
