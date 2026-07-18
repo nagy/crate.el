@@ -315,6 +315,31 @@ against it in the `when-let*` binding, not in the body:
 
 ## TODO
 
+- **Render/mode separation** — currently `crate-mode`'s
+  `define-derived-mode` body both sets up the mode *and* inserts
+  all content.  This coupling forces three warts:
+  `permanent-local` on `crate-name` / `crate-data` (because
+  `kill-all-local-variables` runs before the mode body),
+  `revert-buffer-function #'ignore` (revert can't re-render
+  without access to crate locals), and e2e tests that simulate
+  `find-crate` by hand instead of calling it.  The fix:
+  - Extract all `insert`/`propertize`/`insert-text-button`/
+    `font-lock-ensure` logic from the mode body into a standalone
+    `(crate--render)` function that uses `crate-name` and
+    `crate-data` buffer-locals.
+  - Thin `crate-mode` to just `setq-local` (font-lock defaults,
+    `bookmark-make-record-function`, `revert-buffer-function`).
+  - `find-crate` calls `(crate-mode)` first (kills all locals),
+    then `(setq-local crate-name …)` / `(setq-local crate-data …)`
+    *after* (no `permanent-local` needed), then `(crate--render)`.
+  - `revert-buffer-function` becomes `crate--revert`
+    (`erase-buffer` + `crate--render`) — `g` works.
+  - E2e test calls actual `find-crate` and inspects output.
+- **Derive from `special-mode` instead of `text-mode`** — get
+  read-only, `q`, `g`, and standard buffer conventions for free;
+  drop the manual `read-only-mode 1`.  Pair with render/mode
+  separation above (mode init vs. content insertion split
+  already done).
 - **Completion-at-point for `Cargo.toml`** — provide crate name
   completion in `[dependencies]` sections of `Cargo.toml` buffers.
   Hook into `completion-at-point-functions` with a custom function
