@@ -29,6 +29,7 @@
 (require 'ol)
 
 (declare-function find-crate "crate")
+(declare-function crate--canonical-name "crate")
 
 (defvar crate-name)
 (defvar crate-mode)
@@ -55,8 +56,17 @@ BACKEND is the export backend."
       ('latex (format "\\href{%s}{%s}" url desc))
       (_ desc))))
 
+(defun crate--org-follow (path)
+  "Open the `crate:' link PATH.
+If a buffer already exists for this crate, just switch to it."
+  (let* ((cand (crate--canonical-name path))
+         (bufname (format "Crate: %s" cand)))
+    (if-let* ((buf (get-buffer bufname)))
+        (pop-to-buffer buf)
+      (find-crate cand))))
+
 (org-link-set-parameters "crate"
-                         :follow #'find-crate
+                         :follow #'crate--org-follow
                          :store #'crate--org-store-link
                          :export #'crate-org-export)
 
