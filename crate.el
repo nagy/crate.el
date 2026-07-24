@@ -24,11 +24,11 @@
 ;;; Commentary:
 
 ;; This package provides an interactive interface for browsing Rust
-;; crates from a local static.crates.io JSON dump.
+;; crates from a local crates.io SQLite database.
 ;;
 ;; Data sources are configurable via `defcustom':
 ;;
-;;   - `crate-data-path'  -- Path to a static.crates.io JSON dump file.
+;;   - `crate-data-path'  -- Path to a crates-io.db SQLite database.
 ;;
 ;; Commands:
 ;;
@@ -65,17 +65,17 @@
 (put 'crate-data 'permanent-local t)
 
 (defgroup crate nil
-  "Browse Rust crates from a local JSON dump."
+  "Browse Rust crates from a local SQLite database."
   :group 'tools
   :prefix "crate-"
   :link '(url-link :tag "Repository" "https://github.com/nagy/crate.el"))
 
 (defcustom crate-data-path nil
-  "Path to a static.crates.io JSON dump file.
+  "Path to a crates-io.db SQLite database.
 
-The file should contain a flat JSON object where each key is a
-crate name and each value is an object with fields like
-\"description\", \"repository\", \"homepage\", etc."
+The database should contain a `crates' table with columns:
+name, display_name, description, documentation, homepage,
+repository, created_at, updated_at."
   :type 'file
   :group 'crate)
 
@@ -114,23 +114,32 @@ and returns a directory path."
 (defvar crate--data-cache (make-hash-table :test #'equal))
 
 (defun crate-list-json ()
-  "Load the crate JSON dump from `crate-data-path'.
+  "Load crate data from the SQLite database at `crate-data-path'.
 Returns a hash table keyed by canonical crate name, or nil if
-the file is missing or cannot be parsed.  Results are memoized
+the file is missing or cannot be read.  Results are memoized
 via `with-memoization'; a :failed sentinel prevents retrying
 a corrupt or missing file on every subsequent call."
   (let ((cached (with-memoization (gethash 'data crate--data-cache)
                   (if (and crate-data-path (file-exists-p crate-data-path))
                       (condition-case nil
-                          (let ((raw (with-temp-buffer
-                                       (insert-file-contents crate-data-path)
-                                       (goto-char (point-min))
-                                       (json-parse-buffer)))
-                                (table (make-hash-table :test #'equal)))
-                            (maphash (lambda (key val)
-                                       (puthash (crate--canonical-name key)
-                                                val table))
-                                     raw)
+                          (let* ((db (sqlite-open crate-data-path))
+                                 (rows (sqlite-select db
+                                                      "SELECT name, display_name, description,
+                                           documentation, homepage, repository,
+                                           created_at, updated_at
+                                    FROM crates"))
+                                 (table (make-hash-table :test #'equal)))
+                            (dolist (row rows)
+                              (let ((entry (make-hash-table :test #'equal)))
+                                (puthash "name" (nth 1 row) entry)
+                                (when (nth 2 row) (puthash "description" (nth 2 row) entry))
+                                (when (nth 3 row) (puthash "documentation" (nth 3 row) entry))
+                                (when (nth 4 row) (puthash "homepage" (nth 4 row) entry))
+                                (when (nth 5 row) (puthash "repository" (nth 5 row) entry))
+                                (when (nth 6 row) (puthash "created_at" (nth 6 row) entry))
+                                (when (nth 7 row) (puthash "updated_at" (nth 7 row) entry))
+                                (puthash (nth 0 row) entry table)))
+                            (sqlite-close db)
                             table)
                         (error :failed))
                     :failed))))
@@ -482,29 +491,12 @@ ACTION."
 (defun crate-refresh-cache ()
   "Discard cached crate data.
 The next `find-crate' or completion invocation will reload from
-the JSON file."
+the database."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
         crate--keys-cache nil
         crate-doc--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
-
-
-;;; Marginalia
-
-(defun crate--marginalia-annotator (cand)
-  "Marginalia annotator for `crate' completion candidates.
-Shows the crate description."
-  (when-let* ((data (gethash cand (crate-list-json)))
-              (desc (gethash "description" data))
-              ((not (eq desc :null))))
-    desc))
-
-(defvar marginalia-annotators)
-
-(with-eval-after-load 'marginalia
-  (add-to-list 'marginalia-annotators
-               '(crate crate--marginalia-annotator builtin none)))
 
 
 ;;; Interactive Commands

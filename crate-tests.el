@@ -31,6 +31,38 @@
 
 ;;; Helpers
 
+(defun crate-test--sqlite-db (&rest entries)
+  "Create a temporary SQLite database with mock crate data.
+ENTRIES are (KEY . PLIST) pairs where PLIST contains keyword-value
+pairs like :description \"foo\".  Returns the path to the .db file."
+  (let ((dbpath (make-temp-file "crate-test-" nil ".db"))
+        db)
+    (setq db (sqlite-open dbpath))
+    (sqlite-execute db "CREATE TABLE crates (
+  name TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  documentation TEXT,
+  homepage TEXT,
+  repository TEXT,
+  created_at TEXT,
+  updated_at TEXT
+) STRICT, WITHOUT ROWID")
+    (dolist (e entries)
+      (let* ((plist (cdr e))
+             (name (car e))
+             (desc (plist-get plist :description))
+             (homepage (plist-get plist :homepage))
+             (documentation (plist-get plist :documentation))
+             (repository (plist-get plist :repository))
+             (created_at (plist-get plist :created_at))
+             (updated_at (plist-get plist :updated_at)))
+        (sqlite-execute db "INSERT INTO crates VALUES (?,?,?,?,?,?,?,?)"
+                        (list name name desc documentation homepage
+                              repository created_at updated_at))))
+    (sqlite-close db)
+    dbpath))
+
 (defun crate-test--data-hash (&rest props)
   "Build a hash table of mock crate field data.
 PROPS are alternating keyword-value pairs like :description \"foo\".
@@ -68,14 +100,14 @@ record, not the top-level crate table)."
 (ert-deftest crate-description-from-hash ()
   "`crate--description' extracts description from `crate-data'."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :description "A test crate")
-    (should (equal (crate--description) "A test crate"))))
+                          (crate-test--data-hash :description "A test crate")
+                          (should (equal (crate--description) "A test crate"))))
 
 (ert-deftest crate-description-null ()
   "`crate--description' returns empty string for :null description."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :description :null)
-    (should (equal (crate--description) ""))))
+                          (crate-test--data-hash :description :null)
+                          (should (equal (crate--description) ""))))
 
 (ert-deftest crate-description-missing ()
   "`crate--description' returns empty string when key is absent from data."
@@ -86,46 +118,45 @@ record, not the top-level crate table)."
 (ert-deftest crate-mode-fields ()
   "`crate-mode' renders fields: label+value, docs.rs fallback, label-only for missing."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :name "test-crate"
-                             :description "a crate"
-                             :homepage "https://example.com"
-                             :documentation :null
-                             :id 42)
-    (let ((crate--data-cache (make-hash-table :test 'equal)))
-      (cl-letf (((symbol-function 'cd) #'ignore)
-                ((symbol-function 'url-knowledge-url) nil))
-        (with-temp-buffer
-          (crate-mode)
-          (let ((content (buffer-string)))
-            ;; Homepage has a value.
-            (should (string-match-p "Homepage:.*example.com" content))
-            ;; Documentation is :null � docs.rs fallback link.
-            (should (string-match-p "docs\\.rs/test-crate" content))
-            ;; Updated has no key � label only.
-            (should (string-match-p "Updated: *\n" content))))))))
+                          (crate-test--data-hash :name "test-crate"
+                                                 :description "a crate"
+                                                 :homepage "https://example.com"
+                                                 :documentation :null
+                                                 :id 42)
+                          (let ((crate--data-cache (make-hash-table :test 'equal)))
+                            (cl-letf (((symbol-function 'cd) #'ignore)
+                                      ((symbol-function 'url-knowledge-url) nil))
+                              (with-temp-buffer
+                                (crate-mode)
+                                (let ((content (buffer-string)))
+                                  ;; Homepage has a value.
+                                  (should (string-match-p "Homepage:.*example.com" content))
+                                  ;; Documentation is :null � docs.rs fallback link.
+                                  (should (string-match-p "docs\\.rs/test-crate" content))
+                                  ;; Updated has no key � label only.
+                                  (should (string-match-p "Updated: *\n" content))))))))
 
 
 ;;; Cache
 
 (ert-deftest crate-list-json-from-file ()
-  "`crate-list-json' loads and parses a JSON file."
+  "`crate-list-json' loads and queries a SQLite database."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (tmpfile (make-temp-file "crate-test-" nil ".json")))
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
     (unwind-protect
-        (progn
-          (write-region "{\"serde\":{\"description\":\"serialization\"}}" nil tmpfile)
-          (let ((crate-data-path tmpfile))
-            (let ((result (crate-list-json)))
-              (should (hash-table-p result))
-              (should (gethash "serde" result))
-              (should (equal (gethash "description" (gethash "serde" result))
-                             "serialization")))))
+        (let ((crate-data-path tmpfile))
+          (let ((result (crate-list-json)))
+            (should (hash-table-p result))
+            (should (gethash "serde" result))
+            (should (equal (gethash "description" (gethash "serde" result))
+                           "serialization"))))
       (delete-file tmpfile))))
 
 (ert-deftest crate-list-json-missing-file ()
   "`crate-list-json' returns nil when the file does not exist."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate-data-path "/nonexistent/crate-data.json"))
+        (crate-data-path "/nonexistent/crate-data.db"))
     (should-not (crate-list-json)))
 
   ;; Also test when `crate-data-path' is nil.
@@ -134,12 +165,12 @@ record, not the top-level crate table)."
     (should-not (crate-list-json))))
 
 (ert-deftest crate-list-json-invalid-content ()
-  "`crate-list-json' returns nil when the file contains invalid JSON."
+  "`crate-list-json' returns nil when the file is not a valid database."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (tmpfile (make-temp-file "crate-test-" nil ".json")))
+        (tmpfile (make-temp-file "crate-test-" nil ".db")))
     (unwind-protect
         (progn
-          (write-region "not json at all" nil tmpfile)
+          (write-region "not a database" nil tmpfile)
           (let ((crate-data-path tmpfile))
             (should-not (crate-list-json))))
       (delete-file tmpfile))))
@@ -147,21 +178,20 @@ record, not the top-level crate table)."
 (ert-deftest crate-list-json-memoized ()
   "`crate-list-json' memoizes results in `crate--data-cache'."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (tmpfile (make-temp-file "crate-test-" nil ".json")))
-    (unwind-protect
-        (progn
-          (write-region "{\"serde\":{\"description\":\"serialization\"}}" nil tmpfile)
-          (let ((crate-data-path tmpfile))
-            ;; First call computes.
-            (should (crate-list-json))
-            ;; Change the file to verify second call uses cache, not disk.
-            (write-region "{\"other\":{\"description\":\"changed\"}}" nil tmpfile)
-            (let ((result (crate-list-json)))
-              (should (hash-table-p result))
-              ;; Still returns original data from cache.
-              (should (gethash "serde" result))
-              (should-not (gethash "other" result)))))
-      (delete-file tmpfile))))
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (let ((crate-data-path tmpfile))
+      ;; First call computes.
+      (should (crate-list-json))
+      ;; Delete the file to verify second call uses cache, not disk.
+      (delete-file tmpfile)
+      (let ((result (crate-list-json)))
+        (should (hash-table-p result))
+        ;; Still returns original data from cache.
+        (should (gethash "serde" result))
+        (should (equal (gethash "description" (gethash "serde" result))
+                       "serialization"))))))
+
 
 
 ;;; Bookmarks
@@ -169,13 +199,13 @@ record, not the top-level crate table)."
 (ert-deftest crate-bookmark-make-record ()
   "`crate--bookmark-make-record-function' returns a bookmark record."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :description "A test crate")
-    (let ((rec (crate--bookmark-make-record-function)))
-      (should (stringp (car rec)))
-      (should (string-match-p "test-crate" (car rec)))
-      (should (eq (alist-get 'handler rec) 'crate-bookmark-jump))
-      (should (equal (alist-get 'crate rec) "test-crate"))
-      (should (equal (alist-get 'location rec) "A test crate")))))
+                          (crate-test--data-hash :description "A test crate")
+                          (let ((rec (crate--bookmark-make-record-function)))
+                            (should (stringp (car rec)))
+                            (should (string-match-p "test-crate" (car rec)))
+                            (should (eq (alist-get 'handler rec) 'crate-bookmark-jump))
+                            (should (equal (alist-get 'crate rec) "test-crate"))
+                            (should (equal (alist-get 'location rec) "A test crate")))))
 
 (ert-deftest crate-bookmark-jump ()
   "`crate-bookmark-jump' calls `find-crate' with the stored crate name."
@@ -223,22 +253,22 @@ record, not the top-level crate table)."
 (ert-deftest crate-mode-initialization ()
   "`crate-mode' initializes a read-only buffer with crate details."
   (crate-test--with-crate "test-crate"
-      (crate-test--data-hash :description "A test crate" :id 12345)
-    (let ((crate--data-cache (make-hash-table :test 'equal)))
-      (cl-letf (((symbol-function 'cd) #'ignore)
-                ((symbol-function 'url-knowledge-url) nil))
-        (with-temp-buffer
-          (crate-mode)
-          (should (eq major-mode 'crate-mode))
-          (should buffer-read-only)
-          (should (string-match-p "test-crate" (buffer-string)))
-          (should (string-match-p "A test crate" (buffer-string)))
-          (should (string-match-p "12345" (buffer-string)))
-          ;; Buffer-local variables.
-          (should font-lock-defaults)
-          (should (eq revert-buffer-function #'ignore))
-          (should (eq bookmark-make-record-function
-                     #'crate--bookmark-make-record-function)))))))
+                          (crate-test--data-hash :description "A test crate" :id 12345)
+                          (let ((crate--data-cache (make-hash-table :test 'equal)))
+                            (cl-letf (((symbol-function 'cd) #'ignore)
+                                      ((symbol-function 'url-knowledge-url) nil))
+                              (with-temp-buffer
+                                (crate-mode)
+                                (should (eq major-mode 'crate-mode))
+                                (should buffer-read-only)
+                                (should (string-match-p "test-crate" (buffer-string)))
+                                (should (string-match-p "A test crate" (buffer-string)))
+                                (should (string-match-p "12345" (buffer-string)))
+                                ;; Buffer-local variables.
+                                (should font-lock-defaults)
+                                (should (eq revert-buffer-function #'ignore))
+                                (should (eq bookmark-make-record-function
+                                            #'crate--bookmark-make-record-function)))))))
 
 
 ;;; Faces
@@ -258,7 +288,7 @@ record, not the top-level crate table)."
 (ert-deftest crate-face-definitions ()
   "All custom faces are defined and inherit from known faces."
   (dolist (face '(crate-name-face crate-field-label crate-url crate-date
-                  crate-id crate-description))
+                                  crate-id crate-description))
     (should (facep face))
     (should (face-attribute face :inherit))))
 
@@ -268,17 +298,17 @@ record, not the top-level crate table)."
 (ert-deftest crate-org-store-link-in-crate-mode ()
   "`crate--org-store-link' stores a link when in `crate-mode'."
   (crate-test--with-crate "serde" nil
-    (let ((stored-type nil)
-          (stored-link nil))
-      (cl-letf (((symbol-function 'org-link-store-props)
-                 (lambda (&rest props)
-                   (let ((plist props))
-                     (setq stored-type (plist-get plist :type)
-                           stored-link (plist-get plist :link))))))
-        (let ((major-mode 'crate-mode))
-          (should (crate--org-store-link nil))
-          (should (equal stored-type "crate"))
-          (should (equal stored-link "crate:serde")))))))
+                          (let ((stored-type nil)
+                                (stored-link nil))
+                            (cl-letf (((symbol-function 'org-link-store-props)
+                                       (lambda (&rest props)
+                                         (let ((plist props))
+                                           (setq stored-type (plist-get plist :type)
+                                                 stored-link (plist-get plist :link))))))
+                              (let ((major-mode 'crate-mode))
+                                (should (crate--org-store-link nil))
+                                (should (equal stored-type "crate"))
+                                (should (equal stored-link "crate:serde")))))))
 
 (ert-deftest crate-org-store-link-not-in-crate-mode ()
   "`crate--org-store-link' returns nil outside `crate-mode'."
@@ -397,8 +427,8 @@ record, not the top-level crate table)."
 
 ;;; End-to-end tests with test data
 
-(defvar crate-test--data-file "@testCratesJson@"
-  "Path to the test data file containing serde and tokio.
+(defvar crate-test--data-file "@testCratesDb@"
+  "Path to the test SQLite database containing serde and tokio.
 Substituted at build time by default.nix.")
 
 (defun crate-test--data-ready-p ()
