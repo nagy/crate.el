@@ -483,11 +483,19 @@ Each item is (NAME KIND CHILDREN DOC)."
     (when-let* ((deps (crate--deps crate-name)))
       (insert "\nDependencies:\n")
       (dolist (d deps)
-        (insert (format "  %-40s %-12s %-8s%s"
-                        (nth 0 d) (nth 1 d) (nth 2 d)
-                        (if (eq (nth 3 d) 1) "  (optional)" "")))
-        (insert "\n")))
-    (insert "\n")
+        (let* ((dname (nth 0 d))
+               (kind (nth 2 d))
+               (rest (format " %-12s %-8s%s"
+                             (or (nth 1 d) "") kind
+                             (if (eq (nth 3 d) 1) "  (optional)" "")))
+               (pad (- 40 (length dname))))
+          (insert "  ")
+          (insert-text-button dname
+            'action (lambda (_) (find-crate dname))
+            'follow-link t
+            'face 'crate-url
+            'help-echo (format "View crate: %s" dname))
+          (insert (make-string (max pad 1) ?\s) rest "\n"))))
     ;; Module structure from rustdoc JSON.
     (when-let* ((doc-json (crate-doc--json crate-name)))
       (insert "Modules:\n")
