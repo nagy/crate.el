@@ -46,8 +46,20 @@ pairs like :description \"foo\".  Returns the path to the .db file."
   homepage TEXT,
   repository TEXT,
   created_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  latest_version TEXT,
+  license TEXT,
+  downloads INTEGER NOT NULL DEFAULT 0,
+  trustpub_only INTEGER NOT NULL DEFAULT 0
 ) STRICT, WITHOUT ROWID")
+    (sqlite-execute db "CREATE TABLE dependencies (
+  id INTEGER PRIMARY KEY,
+  crate_name TEXT NOT NULL,
+  dep_name TEXT NOT NULL,
+  req TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'normal',
+  optional INTEGER NOT NULL DEFAULT 0
+) STRICT")
     (dolist (e entries)
       (let* ((plist (cdr e))
              (name (car e))
@@ -56,10 +68,14 @@ pairs like :description \"foo\".  Returns the path to the .db file."
              (documentation (plist-get plist :documentation))
              (repository (plist-get plist :repository))
              (created_at (plist-get plist :created_at))
-             (updated_at (plist-get plist :updated_at)))
-        (sqlite-execute db "INSERT INTO crates VALUES (?,?,?,?,?,?,?,?)"
+             (updated_at (plist-get plist :updated_at))
+             (version (plist-get plist :latest_version))
+             (license (plist-get plist :license))
+             (downloads (or (plist-get plist :downloads) 0)))
+        (sqlite-execute db "INSERT INTO crates VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
                         (list name name desc documentation homepage
-                              repository created_at updated_at))))
+                              repository created_at updated_at
+                              version license downloads 0))))
     (sqlite-close db)
     dbpath))
 
@@ -77,7 +93,7 @@ Returns a hash table suitable for binding to `crate-data'."
   "Build a hash table of mock crate data keyed by crate name.
 ENTRIES are (KEY . PLIST) pairs where PLIST contains keyword-value
 pairs like :description \"foo\".  Returns a hash table suitable as
-the return value of `crate-list-json'."
+the return value of `crate--list'."
   (let ((table (make-hash-table :test 'equal)))
     (dolist (e entries table)
       (let ((inner (make-hash-table :test 'equal)))
@@ -139,53 +155,53 @@ record, not the top-level crate table)."
 
 ;;; Cache
 
-(ert-deftest crate-list-json-from-file ()
-  "`crate-list-json' loads and queries a SQLite database."
+(ert-deftest crate--list-from-file ()
+  "`crate--list' loads and queries a SQLite database."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (tmpfile (crate-test--sqlite-db
                   '("serde" :name "serde" :description "serialization"))))
     (unwind-protect
         (let ((crate-data-path tmpfile))
-          (let ((result (crate-list-json)))
+          (let ((result (crate--list)))
             (should (hash-table-p result))
             (should (gethash "serde" result))
             (should (equal (gethash "description" (gethash "serde" result))
                            "serialization"))))
       (delete-file tmpfile))))
 
-(ert-deftest crate-list-json-missing-file ()
-  "`crate-list-json' returns nil when the file does not exist."
+(ert-deftest crate--list-missing-file ()
+  "`crate--list' returns nil when the file does not exist."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-data-path "/nonexistent/crate-data.db"))
-    (should-not (crate-list-json)))
+    (should-not (crate--list)))
 
   ;; Also test when `crate-data-path' is nil.
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-data-path nil))
-    (should-not (crate-list-json))))
+    (should-not (crate--list))))
 
-(ert-deftest crate-list-json-invalid-content ()
-  "`crate-list-json' returns nil when the file is not a valid database."
+(ert-deftest crate--list-invalid-content ()
+  "`crate--list' returns nil when the file is not a valid database."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (tmpfile (make-temp-file "crate-test-" nil ".db")))
     (unwind-protect
         (progn
           (write-region "not a database" nil tmpfile)
           (let ((crate-data-path tmpfile))
-            (should-not (crate-list-json))))
+            (should-not (crate--list))))
       (delete-file tmpfile))))
 
-(ert-deftest crate-list-json-memoized ()
-  "`crate-list-json' memoizes results in `crate--data-cache'."
+(ert-deftest crate--list-memoized ()
+  "`crate--list' memoizes results in `crate--data-cache'."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (tmpfile (crate-test--sqlite-db
                   '("serde" :name "serde" :description "serialization"))))
     (let ((crate-data-path tmpfile))
       ;; First call computes.
-      (should (crate-list-json))
+      (should (crate--list))
       ;; Delete the file to verify second call uses cache, not disk.
       (delete-file tmpfile)
-      (let ((result (crate-list-json)))
+      (let ((result (crate--list)))
         (should (hash-table-p result))
         ;; Still returns original data from cache.
         (should (gethash "serde" result))
@@ -253,22 +269,27 @@ record, not the top-level crate table)."
 (ert-deftest crate-mode-initialization ()
   "`crate-mode' initializes a read-only buffer with crate details."
   (crate-test--with-crate "test-crate"
-                          (crate-test--data-hash :description "A test crate" :id 12345)
-                          (let ((crate--data-cache (make-hash-table :test 'equal)))
-                            (cl-letf (((symbol-function 'cd) #'ignore)
-                                      ((symbol-function 'url-knowledge-url) nil))
-                              (with-temp-buffer
-                                (crate-mode)
-                                (should (eq major-mode 'crate-mode))
-                                (should buffer-read-only)
-                                (should (string-match-p "test-crate" (buffer-string)))
-                                (should (string-match-p "A test crate" (buffer-string)))
-                                (should (string-match-p "12345" (buffer-string)))
-                                ;; Buffer-local variables.
-                                (should font-lock-defaults)
-                                (should (eq revert-buffer-function #'ignore))
-                                (should (eq bookmark-make-record-function
-                                            #'crate--bookmark-make-record-function)))))))
+    (crate-test--data-hash :description "A test crate"
+                           :latest_version "0.1.0"
+                           :license "MIT"
+                           :downloads 12345678)
+    (let ((crate--data-cache (make-hash-table :test 'equal)))
+      (cl-letf (((symbol-function 'cd) #'ignore)
+                ((symbol-function 'url-knowledge-url) nil)
+                ((symbol-function 'crate--deps) #'ignore))
+        (with-temp-buffer
+          (crate-mode)
+          (should (eq major-mode 'crate-mode))
+          (should buffer-read-only)
+          (should (string-match-p "test-crate" (buffer-string)))
+          (should (string-match-p "A test crate" (buffer-string)))
+          (should (string-match-p "12.3M" (buffer-string)))
+          (should (string-match-p "MIT" (buffer-string)))
+          ;; Buffer-local variables.
+          (should font-lock-defaults)
+          (should (eq revert-buffer-function #'ignore))
+          (should (eq bookmark-make-record-function
+                     #'crate--bookmark-make-record-function)))))))
 
 
 ;;; Faces
@@ -330,7 +351,7 @@ record, not the top-level crate table)."
         (should (equal (aref cols 1) "A test crate"))))))
 
 (ert-deftest crate-browse-entries ()
-  "`crate-browse--entries' generates entries from `crate-list-json'."
+  "`crate-browse--entries' generates entries from `crate--list'."
   (let* ((table (crate-test--crate-table
                  '("htop" :description "process viewer")
                  '("neovim" :description "text editor")))
@@ -437,11 +458,11 @@ Substituted at build time by default.nix.")
        (file-readable-p crate-test--data-file)))
 
 (ert-deftest crate-e2e-load-data ()
-  "End-to-end: `crate-list-json' loads the test data file."
+  "End-to-end: `crate--list' loads the test data file."
   (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-data-path crate-test--data-file))
-    (let ((data (crate-list-json)))
+    (let ((data (crate--list)))
       (should (hash-table-p data))
       (should (= (hash-table-count data) 2))
       (should (gethash "serde" data))
@@ -462,7 +483,7 @@ Substituted at build time by default.nix.")
           (let ((inhibit-read-only t))
             (erase-buffer))
           (setq-local crate-name "serde")
-          (setq-local crate-data (gethash "serde" (crate-list-json)))
+          (setq-local crate-data (gethash "serde" (crate--list)))
           (crate-mode))
         (with-current-buffer buf
           (should (eq major-mode 'crate-mode))

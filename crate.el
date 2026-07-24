@@ -113,36 +113,51 @@ and returns a directory path."
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
 
-(defun crate-list-json ()
+(defun crate--list ()
   "Load crate data from the SQLite database at `crate-data-path'.
 Returns a hash table keyed by canonical crate name, or nil if
 the file is missing or cannot be read.  Results are memoized
 via `with-memoization'; a :failed sentinel prevents retrying
 a corrupt or missing file on every subsequent call."
-  (let ((cached (with-memoization (gethash 'data crate--data-cache)
-                  (if (and crate-data-path (file-exists-p crate-data-path))
-                      (condition-case nil
-                          (let* ((db (sqlite-open crate-data-path))
-                                 (rows (sqlite-select db
-                                                      "SELECT name, display_name, description,
-                                           documentation, homepage, repository,
-                                           created_at, updated_at
-                                    FROM crates"))
-                                 (table (make-hash-table :test #'equal)))
-                            (dolist (row rows)
-                              (let ((entry (make-hash-table :test #'equal)))
-                                (puthash "name" (nth 1 row) entry)
-                                (when (nth 2 row) (puthash "description" (nth 2 row) entry))
-                                (when (nth 3 row) (puthash "documentation" (nth 3 row) entry))
-                                (when (nth 4 row) (puthash "homepage" (nth 4 row) entry))
-                                (when (nth 5 row) (puthash "repository" (nth 5 row) entry))
-                                (when (nth 6 row) (puthash "created_at" (nth 6 row) entry))
-                                (when (nth 7 row) (puthash "updated_at" (nth 7 row) entry))
-                                (puthash (nth 0 row) entry table)))
-                            (sqlite-close db)
-                            table)
-                        (error :failed))
-                    :failed))))
+  (let ((cached
+         (with-memoization (gethash 'data crate--data-cache)
+           (if (and crate-data-path (file-exists-p crate-data-path))
+               (condition-case nil
+                   (let* ((db (sqlite-open crate-data-path))
+                          (rows
+                           (sqlite-select
+                            db
+                            "SELECT name, display_name, description,
+                                    documentation, homepage, repository,
+                                    created_at, updated_at,
+                                    latest_version, license, downloads
+                             FROM crates"))
+                          (table (make-hash-table :test #'equal)))
+                     (dolist (row rows)
+                       (let ((entry (make-hash-table :test #'equal)))
+                         (puthash "name" (nth 1 row) entry)
+                         (when (nth 2 row)
+                           (puthash "description" (nth 2 row) entry))
+                         (when (nth 3 row)
+                           (puthash "documentation" (nth 3 row) entry))
+                         (when (nth 4 row)
+                           (puthash "homepage" (nth 4 row) entry))
+                         (when (nth 5 row)
+                           (puthash "repository" (nth 5 row) entry))
+                         (when (nth 6 row)
+                           (puthash "created_at" (nth 6 row) entry))
+                         (when (nth 7 row)
+                           (puthash "updated_at" (nth 7 row) entry))
+                         (when (nth 8 row)
+                           (puthash "latest_version" (nth 8 row) entry))
+                         (when (nth 9 row)
+                           (puthash "license" (nth 9 row) entry))
+                         (puthash "downloads" (or (nth 10 row) 0) entry)
+                         (puthash (nth 0 row) entry table)))
+                     (sqlite-close db)
+                     table)
+                 (error :failed))
+             :failed))))
     (unless (eq cached :failed)
       cached)))
 
@@ -198,8 +213,8 @@ Builds the JSON on-demand via `crate-doc--build' and caches the
 result.  Returns nil if docs cannot be built, the crate has no
 JSON output, or a prior build attempt already failed."
   (when (and crate-doc-enable
-             (crate-list-json)
-             (gethash name (crate-list-json)))
+             (crate--list)
+             (gethash name (crate--list)))
     (let ((cached (with-memoization (gethash name crate-doc--cache)
                     ;; Return :failed sentinel so with-memoization
                     ;; doesn't retry builds that already failed.
@@ -292,6 +307,31 @@ empty string when the description is missing or :null."
         it)
       ""))
 
+(defun crate--deps (name)
+  "Return dependency rows for crate NAME from the SQLite database.
+Returns a list of (dep_name req kind optional) lists, or nil.
+Memoized in `crate--data-cache'."
+  (when (and crate-data-path (file-exists-p crate-data-path))
+    (with-memoization (gethash (cons 'deps name) crate--data-cache)
+      (condition-case nil
+          (let ((db (sqlite-open crate-data-path)))
+            (prog1
+                (sqlite-select db
+                  "SELECT dep_name, req, kind, optional
+                    FROM dependencies WHERE crate_name = ?
+                    ORDER BY optional, kind, dep_name"
+                  (list name))
+              (sqlite-close db)))
+        (error :failed)))))
+
+(defun crate--format-downloads (n)
+  "Format N as a human-readable download count."
+  (cond
+   ((>= n 1000000000) (format "%.1fB" (/ n 1000000000.0)))
+   ((>= n 1000000) (format "%.1fM" (/ n 1000000.0)))
+   ((>= n 1000) (format "%dK" (/ n 1000)))
+   (t (number-to-string n))))
+
 ;;; Faces
 
 (defface crate-name-face
@@ -345,6 +385,9 @@ Inherits from `package-description' when available."
     ;; Updated date
     ("^Updated:[[:space:]]+\\(.+\\)"
      (1 'crate-date))
+    ;; Downloads number
+    ("^Downloads:[[:space:]]+\\([0-9.]+[KMB]?\\)"
+     (1 'crate-id))
     ;; Crate id number
     ("^Id:[[:space:]]+\\([0-9]+\\)"
      (1 'crate-id)))
@@ -429,12 +472,22 @@ Each item is (NAME KIND CHILDREN DOC)."
                               'face 'link
                               'help-echo "Open documentation on docs.rs"))))
     (insert "\n")
+    (field "Version:       " "latest_version")
+    (field "License:       " "license")
+    (insert "Downloads:     ")
+    (when-let* ((dls (gethash "downloads" crate-data)))
+      (insert (crate--format-downloads dls)))
+    (insert "\n")
     (field "Updated:       " "updated_at")
-    (insert "Id:            ")
-    (when-let* ((it (gethash "id" crate-data)))
-      (unless (eq it :null)
-        (insert (number-to-string (floor it)))))
-    (insert "\n\n")
+    ;; Dependencies from the crate's default version.
+    (when-let* ((deps (crate--deps crate-name)))
+      (insert "\nDependencies:\n")
+      (dolist (d deps)
+        (insert (format "  %-40s %-12s %-8s%s"
+                        (nth 0 d) (nth 1 d) (nth 2 d)
+                        (if (eq (nth 3 d) 1) "  (optional)" "")))
+        (insert "\n")))
+    (insert "\n")
     ;; Module structure from rustdoc JSON.
     (when-let* ((doc-json (crate-doc--json crate-name)))
       (insert "Modules:\n")
@@ -461,14 +514,14 @@ Set by `crate--keys' and cleared by `crate-refresh-cache'.")
   "Return the list of all crate names for completion.
 Loads from `crate-data-path' if needed and caches the result."
   (unless crate--keys-cache
-    (let ((data (crate-list-json)))
+    (let ((data (crate--list)))
       (when data
         (setq crate--keys-cache (hash-table-keys data)))))
   crate--keys-cache)
 
 (defun crate--annotate (candidate)
   "Completion annotation function for crate CANDIDATE."
-  (let* ((data (gethash candidate (crate-list-json)))
+  (let* ((data (gethash candidate (crate--list)))
          (desc (and data (gethash "description" data))))
     (when (and desc (not (eq desc :null))
                (not (string-empty-p desc)))
@@ -517,7 +570,7 @@ or switches to an existing one."
       (when-let* ((slash (string-search "/" cand)))
         (setq cand (substring cand 0 slash))))
     (setq cand (crate--canonical-name cand))
-    (let* ((data (crate-list-json))
+    (let* ((data (crate--list))
            (entry (when data (gethash cand data))))
       (unless entry
         (user-error "Crate `%s' not found" cand))
@@ -624,7 +677,7 @@ When nil, all crates are shown.")
   "Generate `tabulated-list-entries' for all crates.
 When NAME-LIST is non-nil, only include entries whose names
 appear in the list."
-  (let ((items (crate-list-json))
+  (let ((items (crate--list))
         entries)
     (when items
       (if name-list
@@ -663,7 +716,7 @@ appear in the list."
 (defun crate--filter-by-prefix (name-prefix)
   "Return a list of crate names from the live cache matching NAME-PREFIX."
   (let ((names nil)
-        (items (crate-list-json)))
+        (items (crate--list)))
     (when items
       (maphash (lambda (name _data)
                  (when (string-match-p (regexp-quote name-prefix) name)
