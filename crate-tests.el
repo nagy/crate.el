@@ -677,5 +677,19 @@ callers must filter them by checking for :null."
     (puthash "index" (make-hash-table :test 'equal) json)
     (should-not (crate-doc--module-tree json))))
 
+(ert-deftest crate-doc-module-tree-dangling-id ()
+  "`crate-doc--module-tree' skips IDs missing from the index instead of crashing."
+  (let* ((json (json-parse-string
+                "{ \"root\": 0,
+                   \"index\": {
+                     \"0\": { \"name\": \"root\", \"inner\": {
+                       \"module\": { \"is_crate\": true, \"items\": [1,99] }}},
+                     \"1\": { \"name\": \"foo\", \"inner\": {
+                       \"struct\": {} }}
+                   }}"))
+         (tree (crate-doc--module-tree json)))
+    ;; ID 99 is dangling: item 1 survives, dangling entry is dropped.
+    (should (= (length tree) 1))
+    (should (equal (car (car tree)) "foo"))))
 (provide 'crate-tests)
 ;;; crate-tests.el ends here

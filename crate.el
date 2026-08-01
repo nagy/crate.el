@@ -248,7 +248,6 @@ where children have the same structure.  KIND is a symbol:
 `module', `struct', `trait', `function', `macro', `enum', etc.
 DOC is the first sentence of the item's docstring, or nil.
 Non-module items have nil as children."
-  (declare (pure t) (side-effect-free t))
   (when-let* ((root-id (gethash "root" json))
               (index (gethash "index" json))
               (root-num (if (integerp root-id) root-id
@@ -268,28 +267,31 @@ Non-module items have nil as children."
                     s)
                 80))))
          (walk (id-str)
-           (let* ((item (gethash id-str index))
-                  (name (gethash "name" item))
-                  (inner (gethash "inner" item))
-                  (docs (doc-summary (gethash "docs" item)))
-                  (kind (and inner
-                             (let ((keys (hash-table-keys inner)))
-                               (when keys (intern (car keys))))))
-                  (children
-                   (when (and inner (eq kind 'module))
-                     (when-let* ((mod (gethash "module" inner))
-                                 (ids (gethash "items" mod)))
-                       (mapcar (lambda (id)
-                                 (walk (if (integerp id)
-                                           (number-to-string id)
-                                         (number-to-string (floor id)))))
-                               ids)))))
-             (list name kind children docs))))
-      (mapcar (lambda (id)
-                (walk (if (integerp id)
-                          (number-to-string id)
-                        (number-to-string (floor id)))))
-              (gethash "items" (gethash "module" (gethash "inner" root-item)))))))
+           (when-let* ((item (gethash id-str index)))
+             (let* ((name (gethash "name" item))
+                    (inner (gethash "inner" item))
+                    (docs (doc-summary (gethash "docs" item)))
+                    (kind (and inner
+                               (let ((keys (hash-table-keys inner)))
+                                 (when keys (intern (car keys))))))
+                    (children
+                     (when (and inner (eq kind 'module))
+                       (when-let* ((mod (gethash "module" inner))
+                                   (ids (gethash "items" mod)))
+                         ;; `walk' returns nil for IDs missing from the
+                         ;; index; drop them so callers never see nil
+                         ;; entries (which `insert-doc-tree' can't render).
+                         (delq nil (mapcar (lambda (id)
+                                              (walk (if (integerp id)
+                                                        (number-to-string id)
+                                                      (number-to-string (floor id)))))
+                                            ids))))))
+             (list name kind children docs)))))
+      (delq nil (mapcar (lambda (id)
+                          (walk (if (integerp id)
+                                    (number-to-string id)
+                                  (number-to-string (floor id)))))
+                        (gethash "items" (gethash "module" (gethash "inner" root-item))))))))
 
 
 ;;; Helpers
