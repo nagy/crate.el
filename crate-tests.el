@@ -132,7 +132,7 @@ record, not the top-level crate table)."
     (should (equal (crate--description) ""))))
 
 (ert-deftest crate-mode-fields ()
-  "`crate-mode' renders fields: label+value, docs.rs fallback, label-only for missing."
+  "`crate--render' renders fields: label+value, docs.rs fallback, label-only for missing."
   (crate-test--with-crate "test-crate"
                           (crate-test--data-hash :name "test-crate"
                                                  :description "a crate"
@@ -144,12 +144,13 @@ record, not the top-level crate table)."
                                       ((symbol-function 'url-knowledge-url) nil))
                               (with-temp-buffer
                                 (crate-mode)
+                                (crate--render)
                                 (let ((content (buffer-string)))
                                   ;; Homepage has a value.
                                   (should (string-match-p "Homepage:.*example.com" content))
-                                  ;; Documentation is :null � docs.rs fallback link.
+                                  ;; Documentation is :null → docs.rs fallback link.
                                   (should (string-match-p "docs\\.rs/test-crate" content))
-                                  ;; Updated has no key � label only.
+                                  ;; Updated has no key → label only.
                                   (should (string-match-p "Updated: *\n" content))))))))
 
 
@@ -209,6 +210,60 @@ record, not the top-level crate table)."
                        "serialization"))))))
 
 
+(ert-deftest crate--keys-caches-empty-db ()
+  "`crate--keys' caches a nil result so an empty database isn't re-scanned."
+  (let ((crate--keys-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--list)
+               (lambda () (make-hash-table :test 'equal))))  ; empty table
+      (should-not (crate--keys))
+      (should (gethash 'keys crate--keys-cache))
+      ;; Second call must not re-run crate--list (cache holds the sentinel).
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'crate--list)
+                   (lambda () (cl-incf calls) (make-hash-table :test 'equal))))
+          (should-not (crate--keys))
+          (should (= calls 0)))))))
+
+(ert-deftest crate--keys-caches-failed-load ()
+  "`crate--keys' caches a failed `crate--list' so it isn't retried per call."
+  (let ((crate--keys-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--list) (lambda () nil)))
+      (should-not (crate--keys))
+      (should (gethash 'keys crate--keys-cache))
+      ;; Second call must not re-run crate--list.
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'crate--list)
+                   (lambda () (cl-incf calls) nil)))
+          (should-not (crate--keys))
+          (should (= calls 0)))))))
+
+(ert-deftest crate--deps-memoized ()
+  "`crate--deps' caches both empty and failed results."
+  ;; Empty result (no rows) is cached: second call doesn't re-query.
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/nonexistent/crate-data.db"))
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'sqlite-open)
+                 (lambda (&rest _) (cl-incf calls) (make-hash-table :test 'equal)))
+                ((symbol-function 'sqlite-select) (lambda (&rest _) nil))
+                ((symbol-function 'sqlite-close) #'ignore))
+        ;; File doesn't exist: returns nil without opening.
+        (should-not (crate--deps "serde"))
+        (should (= calls 0)))))
+  ;; Failed query is cached as :failed.
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/tmp/exists.db"))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (&rest _) (error "query failed")))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (should-not (crate--deps "serde"))
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'sqlite-select)
+                   (lambda (&rest _) (cl-incf calls) (error "query failed"))))
+          (should-not (crate--deps "serde"))
+          (should (= calls 0)))))))
 
 ;;; Bookmarks
 
@@ -290,7 +345,7 @@ record, not the top-level crate table)."
 ;;; Major mode
 
 (ert-deftest crate-mode-initialization ()
-  "`crate-mode' initializes a read-only buffer with crate details."
+  "`crate-mode' sets up mode state; `crate--render' fills a read-only buffer."
   (crate-test--with-crate "test-crate"
     (crate-test--data-hash :description "A test crate"
                            :latest_version "0.1.0"
@@ -302,19 +357,41 @@ record, not the top-level crate table)."
                 ((symbol-function 'crate--deps) #'ignore))
         (with-temp-buffer
           (crate-mode)
+          ;; Mode setup only: no content yet.
           (should (eq major-mode 'crate-mode))
+          (should (string-empty-p (buffer-string)))
+          (should font-lock-defaults)
+          (should (eq revert-buffer-function #'crate--revert))
+          (should (eq bookmark-make-record-function
+                     #'crate--bookmark-make-record-function))
+          ;; Render fills the buffer and makes it read-only.
+          (crate--render)
           (should buffer-read-only)
           (should (string-match-p "test-crate" (buffer-string)))
           (should (string-match-p "A test crate" (buffer-string)))
           (should (string-match-p "12.3M" (buffer-string)))
-          (should (string-match-p "MIT" (buffer-string)))
-          ;; Buffer-local variables.
-          (should font-lock-defaults)
-          (should (eq revert-buffer-function #'ignore))
-          (should (eq bookmark-make-record-function
-                     #'crate--bookmark-make-record-function)))))))
+          (should (string-match-p "MIT" (buffer-string))))))))
 
 
+(ert-deftest crate-revert-buffer ()
+  "`crate--revert' re-renders the crate buffer, so `g' works."
+  (crate-test--with-crate "test-crate"
+    (crate-test--data-hash :description "A test crate"
+                           :latest_version "0.1.0"
+                           :license "MIT")
+    (let ((crate--data-cache (make-hash-table :test 'equal)))
+      (cl-letf (((symbol-function 'cd) #'ignore)
+                ((symbol-function 'url-knowledge-url) nil)
+                ((symbol-function 'crate--deps) #'ignore))
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (let ((first (buffer-string)))
+            ;; Simulate `g': revert re-renders from the buffer-locals.
+            (let ((inhibit-read-only t))
+              (erase-buffer))
+            (crate--revert)
+            (should (equal (buffer-string) first))))))))
 ;;; Faces
 
 (ert-deftest crate-font-lock-keywords-structure ()
@@ -501,19 +578,15 @@ Substituted at build time by default.nix.")
               ((symbol-function 'cd) #'ignore)
               ((symbol-function 'url-knowledge-url) nil))
       (let ((buf (get-buffer-create "*Crate: serde*")))
-        ;; Simulate find-crate creating the buffer
-        (with-current-buffer buf
-          (let ((inhibit-read-only t))
-            (erase-buffer))
-          (setq-local crate-name "serde")
-          (setq-local crate-data (gethash "serde" (crate--list)))
-          (crate-mode))
-        (with-current-buffer buf
-          (should (eq major-mode 'crate-mode))
-          (should (string-match-p "serde" (buffer-string)))
-          (should (string-match-p "serialization" (buffer-string)))
-          ;; Original name from data, not the lowercased lookup key.
-          (should (string-match-p "serde" (buffer-string)))
+        (unwind-protect
+            (progn
+              (switch-to-buffer buf)
+              (find-crate "serde")
+              (should (eq major-mode 'crate-mode))
+              (should (string-match-p "serde" (buffer-string)))
+              (should (string-match-p "serialization" (buffer-string)))
+              ;; Original name from data, not the lowercased lookup key.
+              (should (string-match-p "serde" (buffer-string))))
           (kill-buffer buf))))))
 
 (ert-deftest crate-e2e-browse-crates ()

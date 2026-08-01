@@ -60,9 +60,7 @@
 (defvar browse-url-default-handlers)
 
 (defvar-local crate-name nil)
-(put 'crate-name 'permanent-local t)
 (defvar-local crate-data nil)
-(put 'crate-data 'permanent-local t)
 
 (defgroup crate nil
   "Browse Rust crates from a local SQLite database."
@@ -310,19 +308,24 @@ empty string when the description is missing or :null."
 (defun crate--deps (name)
   "Return dependency rows for crate NAME from the SQLite database.
 Returns a list of (dep_name req kind optional) lists, or nil.
-Memoized in `crate--data-cache'."
+Memoized in `crate--data-cache'; a :failed sentinel prevents
+retrying failed queries, and nil results (no rows) are cached."
   (when (and crate-data-path (file-exists-p crate-data-path))
-    (with-memoization (gethash (cons 'deps name) crate--data-cache)
-      (condition-case nil
-          (let ((db (sqlite-open crate-data-path)))
-            (prog1
-                (sqlite-select db
-                  "SELECT dep_name, req, kind, optional
-                    FROM dependencies WHERE crate_name = ?
-                    ORDER BY optional, kind, dep_name"
-                  (list name))
-              (sqlite-close db)))
-        (error :failed)))))
+    (let ((cached (with-memoization (gethash (cons 'deps name) crate--data-cache)
+                    ;; Return :failed sentinel so with-memoization
+                    ;; doesn't retry failed queries on every call.
+                    (condition-case nil
+                        (let ((db (sqlite-open crate-data-path)))
+                          (prog1
+                              (sqlite-select db
+                                "SELECT dep_name, req, kind, optional
+                                  FROM dependencies WHERE crate_name = ?
+                                  ORDER BY optional, kind, dep_name"
+                                (list name))
+                            (sqlite-close db)))
+                      (error :failed)))))
+      (unless (eq cached :failed)
+        cached))))
 
 (defun crate--format-downloads (n)
   "Format N as a human-readable download count."
@@ -401,13 +404,34 @@ Inherits from `package-description' when available."
 
 \\{crate-mode-map}
 This mode is not intended to be invoked directly; use
-`find-crate' instead."
+`find-crate' instead.  The buffer content is inserted by
+`crate--render' after the mode is set up."
   (setq-local default-directory temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
-  (setq-local revert-buffer-function #'ignore)
-  (setq-local list-buffers-directory (crate--description))
-  (cl-labels
+  (setq-local revert-buffer-function #'crate--revert)
+  ;; `crate-data' is set after the mode (by `find-crate'), so the
+  ;; description isn't available here; `crate--render' fills the buffer.
+  (setq-local list-buffers-directory nil))
+
+(defun crate--revert (&optional _ignore-auto _noconfirm _preserve-modes)
+  "Re-render the current crate buffer.
+
+`revert-buffer-function' for `crate-mode'.  Re-renders from the
+live `crate-name' / `crate-data' buffer-locals so `g' works."
+  (crate--render))
+
+(defun crate--render ()
+  "Render the current crate detail buffer.
+
+Inserts the fields for `crate-data' (with `crate-name' as
+fallback), dependency buttons, and the rustdoc module tree.
+Erases existing content first, so re-rendering is idempotent."
+  ;; Bind `inhibit-read-only' for the whole render: the buffer may
+  ;; already be read-only from a previous render.
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (cl-labels
       ((field (label key)
          "Insert LABEL, then the value of KEY from `crate-data'.
 If the value is nil or :null, nothing is inserted after the label."
@@ -509,23 +533,28 @@ Each item is (NAME KIND CHILDREN DOC)."
     (font-lock-ensure)
     (set-buffer-modified-p nil)
     (goto-char (point-min))
-    (read-only-mode 1)))
+    (read-only-mode 1))))
 
 
 ;;; Completion
 
 (defvar crate--keys-cache nil
   "Cached list of lowercase crate names for completion.
-Set by `crate--keys' and cleared by `crate-refresh-cache'.")
+Memoized with a :failed sentinel; cleared by `crate-refresh-cache'.")
 
 (defun crate--keys ()
   "Return the list of all crate names for completion.
-Loads from `crate-data-path' if needed and caches the result."
-  (unless crate--keys-cache
-    (let ((data (crate--list)))
-      (when data
-        (setq crate--keys-cache (hash-table-keys data)))))
-  crate--keys-cache)
+Loads from `crate-data-path' if needed and caches the result.
+An empty database yields nil (cached, not re-scanned per call)
+and a failed load stays failed until `crate-refresh-cache'."
+  (let ((cached (with-memoization (gethash 'keys crate--keys-cache)
+                  ;; Return :failed sentinel so with-memoization
+                  ;; doesn't recompute on nil (empty database).
+                  (let ((data (crate--list)))
+                    (or (and data (hash-table-keys data))
+                        :failed)))))
+    (unless (eq cached :failed)
+      cached)))
 
 (defun crate--annotate (candidate)
   "Completion annotation function for crate CANDIDATE."
@@ -584,15 +613,14 @@ or switches to an existing one."
         (user-error "Crate `%s' not found" cand))
       (let ((bufname (format "Crate: %s" cand)))
         (switch-to-buffer bufname)
-        ;; The buffer may already hold read-only content from an earlier
-        ;; visit; reset it and erase so re-rendering doesn't duplicate or
-        ;; signal `buffer-read-only'.
+        (crate-mode)
+        ;; Set the crate locals after `crate-mode' (whose
+        ;; `kill-all-local-variables' would otherwise wipe them),
+        ;; then render.  Re-rendering an existing buffer is safe:
+        ;; `crate--render' erases first.
         (setq-local crate-name cand)
         (setq-local crate-data entry)
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (read-only-mode -1))
-        (crate-mode)))))
+        (crate--render)))))
 
 
 ;;;###autoload
