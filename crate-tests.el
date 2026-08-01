@@ -242,6 +242,29 @@ record, not the top-level crate table)."
     (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
       (should-error (find-crate "nonexistent") :type 'user-error))))
 
+(ert-deftest crate-find-crate-twice ()
+  "`find-crate' on an existing buffer re-renders without error or duplication."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname)))))
+            (find-crate "serde")
+            (let ((buf (get-buffer "Crate: serde")))
+              (should buf)
+              (with-current-buffer buf
+                (should (eq major-mode 'crate-mode))
+                (let ((first-content (buffer-string)))
+                  ;; Second visit must not error and must not duplicate.
+                  (find-crate "serde")
+                  (should (equal (buffer-string) first-content))))
+              (kill-buffer buf))))
+      (delete-file tmpfile))))
+
 
 ;;; Interactive commands
 

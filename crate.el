@@ -584,8 +584,14 @@ or switches to an existing one."
         (user-error "Crate `%s' not found" cand))
       (let ((bufname (format "Crate: %s" cand)))
         (switch-to-buffer bufname)
+        ;; The buffer may already hold read-only content from an earlier
+        ;; visit; reset it and erase so re-rendering doesn't duplicate or
+        ;; signal `buffer-read-only'.
         (setq-local crate-name cand)
         (setq-local crate-data entry)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (read-only-mode -1))
         (crate-mode)))))
 
 
