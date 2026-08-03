@@ -282,11 +282,11 @@ Non-module items have nil as children."
                          ;; index; drop them so callers never see nil
                          ;; entries (which `insert-doc-tree' can't render).
                          (delq nil (mapcar (lambda (id)
-                                              (walk (if (integerp id)
-                                                        (number-to-string id)
-                                                      (number-to-string (floor id)))))
-                                            ids))))))
-             (list name kind children docs)))))
+                                             (walk (if (integerp id)
+                                                       (number-to-string id)
+                                                     (number-to-string (floor id)))))
+                                           ids))))))
+               (list name kind children docs)))))
       (delq nil (mapcar (lambda (id)
                           (walk (if (integerp id)
                                     (number-to-string id)
@@ -320,10 +320,10 @@ retrying failed queries, and nil results (no rows) are cached."
                         (let ((db (sqlite-open crate-data-path)))
                           (prog1
                               (sqlite-select db
-                                "SELECT dep_name, req, kind, optional
+                                             "SELECT dep_name, req, kind, optional
                                   FROM dependencies WHERE crate_name = ?
                                   ORDER BY optional, kind, dep_name"
-                                (list name))
+                                             (list name))
                             (sqlite-close db)))
                       (error :failed)))))
       (unless (eq cached :failed)
@@ -434,113 +434,113 @@ Erases existing content first, so re-rendering is idempotent."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (cl-labels
-      ((field (label key)
-         "Insert LABEL, then the value of KEY from `crate-data'.
+        ((field (label key)
+           "Insert LABEL, then the value of KEY from `crate-data'.
 If the value is nil or :null, nothing is inserted after the label."
-         (insert label)
-         (let ((val (gethash key crate-data)))
-           (unless (or (null val) (eq val :null))
-             (insert val)))
-         (insert "\n"))
-       (insert-doc-tree (items level)
-         "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation.
+           (insert label)
+           (let ((val (gethash key crate-data)))
+             (unless (or (null val) (eq val :null))
+               (insert val)))
+           (insert "\n"))
+         (insert-doc-tree (items level)
+           "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation.
 Each item is (NAME KIND CHILDREN DOC)."
-         (dolist (item items)
-           (let ((name (car item))
-                 (_kind (cadr item))
-                 (children (caddr item))
-                 (docs (cadddr item)))
-             (unless (eq name :null)
-               (insert (make-string (* level 2) ?\s)
-                       "- " name)
-               (if children
-                   (progn
-                     (insert "\n")
-                     (insert-doc-tree children (1+ level)))
-                 (when docs
-                   (insert (propertize (concat " — " docs)
-                                       'face 'crate-description)))
-                 (insert "\n")))))))
-    (insert "Name:          ")
-    (insert (or (gethash "name" crate-data) crate-name) "\n")
-    (insert "Description:   ")
-    (insert (crate--description))
-    (insert "\n")
-    (field "Homepage:      " "homepage")
-    ;; Repository
-    (insert "Repository:    ")
-    (when-let* ((repo (gethash "repository" crate-data))
-                ((not (eq repo :null))))
-      (insert (propertize repo 'mouse-face 'highlight))
-      (when crate-repository-directory
-        (let ((dir (cond
-                    ((functionp crate-repository-directory)
-                     (funcall crate-repository-directory repo))
-                    ((stringp crate-repository-directory)
-                     (expand-file-name
-                      (string-replace "/" "__"
-                                      (string-remove-prefix "https://" repo))
-                      crate-repository-directory)))))
-          (when (and dir (file-exists-p dir))
-            (setq-local default-directory dir)))))
-    (insert "\n")
-    ;; Documentation (with docs.rs fallback)
-    (insert (propertize "Documentation: " 'face 'crate-field-label))
-    (let ((doc (gethash "documentation" crate-data)))
-      (if (and doc (not (eq doc :null)))
-          (insert doc)
-        (let ((url (format "https://docs.rs/%s"
-                           (downcase (string-replace "_" "-"
-                                                     (or (gethash "name" crate-data) crate-name))))))
-          (insert-text-button url
-                              'action (lambda (_) (browse-url url))
-                              'follow-link t
-                              'face 'link
-                              'help-echo "Open documentation on docs.rs"))))
-    (insert "\n")
-    (field "Version:       " "latest_version")
-    (field "License:       " "license")
-    (insert "Downloads:     ")
-    (when-let* ((dls (gethash "downloads" crate-data)))
-      (insert (crate--format-downloads dls)))
-    (insert "\n")
-    (field "Updated:       " "updated_at")
-    ;; Dependencies from the crate's default version.
-    (when-let* ((deps (crate--deps crate-name)))
-      (insert "\nDependencies:\n")
-      (dolist (d deps)
-        (let* ((dname (nth 0 d))
-               (kind (nth 2 d))
-               (rest (format " %-12s %-8s%s"
-                             (or (nth 1 d) "") kind
-                             (if (eq (nth 3 d) 1) "  (optional)" "")))
-               (pad (- 40 (length dname))))
-          (insert "  ")
-          (insert-text-button dname
-            'action (lambda (_) (find-crate dname))
-            'follow-link t
-            'face 'crate-url
-            'help-echo (format "View crate: %s" dname))
-          (insert (make-string (max pad 1) ?\s) rest "\n"))))
-    ;; Module structure from rustdoc JSON.
-    (when-let* ((doc-json (crate-doc--json crate-name)))
-      (insert "Modules:\n")
-      (insert-doc-tree (crate-doc--module-tree doc-json) 0))
-    ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
-    (save-excursion
+           (dolist (item items)
+             (let ((name (car item))
+                   (_kind (cadr item))
+                   (children (caddr item))
+                   (docs (cadddr item)))
+               (unless (eq name :null)
+                 (insert (make-string (* level 2) ?\s)
+                         "- " name)
+                 (if children
+                     (progn
+                       (insert "\n")
+                       (insert-doc-tree children (1+ level)))
+                   (when docs
+                     (insert (propertize (concat " — " docs)
+                                         'face 'crate-description)))
+                   (insert "\n")))))))
+      (insert "Name:          ")
+      (insert (or (gethash "name" crate-data) crate-name) "\n")
+      (insert "Description:   ")
+      (insert (crate--description))
+      (insert "\n")
+      (field "Homepage:      " "homepage")
+      ;; Repository
+      (insert "Repository:    ")
+      (when-let* ((repo (gethash "repository" crate-data))
+                  ((not (eq repo :null))))
+        (insert (propertize repo 'mouse-face 'highlight))
+        (when crate-repository-directory
+          (let ((dir (cond
+                      ((functionp crate-repository-directory)
+                       (funcall crate-repository-directory repo))
+                      ((stringp crate-repository-directory)
+                       (expand-file-name
+                        (string-replace "/" "__"
+                                        (string-remove-prefix "https://" repo))
+                        crate-repository-directory)))))
+            (when (and dir (file-exists-p dir))
+              (setq-local default-directory dir)))))
+      (insert "\n")
+      ;; Documentation (with docs.rs fallback)
+      (insert (propertize "Documentation: " 'face 'crate-field-label))
+      (let ((doc (gethash "documentation" crate-data)))
+        (if (and doc (not (eq doc :null)))
+            (insert doc)
+          (let ((url (format "https://docs.rs/%s"
+                             (downcase (string-replace "_" "-"
+                                                       (or (gethash "name" crate-data) crate-name))))))
+            (insert-text-button url
+                                'action (lambda (_) (browse-url url))
+                                'follow-link t
+                                'face 'link
+                                'help-echo "Open documentation on docs.rs"))))
+      (insert "\n")
+      (field "Version:       " "latest_version")
+      (field "License:       " "license")
+      (insert "Downloads:     ")
+      (when-let* ((dls (gethash "downloads" crate-data)))
+        (insert (crate--format-downloads dls)))
+      (insert "\n")
+      (field "Updated:       " "updated_at")
+      ;; Dependencies from the crate's default version.
+      (when-let* ((deps (crate--deps crate-name)))
+        (insert "\nDependencies:\n")
+        (dolist (d deps)
+          (let* ((dname (nth 0 d))
+                 (kind (nth 2 d))
+                 (rest (format " %-12s %-8s%s"
+                               (or (nth 1 d) "") kind
+                               (if (eq (nth 3 d) 1) "  (optional)" "")))
+                 (pad (- 40 (length dname))))
+            (insert "  ")
+            (insert-text-button dname
+                                'action (lambda (_) (find-crate dname))
+                                'follow-link t
+                                'face 'crate-url
+                                'help-echo (format "View crate: %s" dname))
+            (insert (make-string (max pad 1) ?\s) rest "\n"))))
+      ;; Module structure from rustdoc JSON.
+      (when-let* ((doc-json (crate-doc--json crate-name)))
+        (insert "Modules:\n")
+        (insert-doc-tree (crate-doc--module-tree doc-json) 0))
+      ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "https?://[^[:space:]\n]+" nil t)
+          (add-text-properties (match-beginning 0) (match-end 0)
+                               '(mouse-face highlight))))
+      (font-lock-ensure)
+      (set-buffer-modified-p nil)
       (goto-char (point-min))
-      (while (re-search-forward "https?://[^[:space:]\n]+" nil t)
-        (add-text-properties (match-beginning 0) (match-end 0)
-                             '(mouse-face highlight))))
-    (font-lock-ensure)
-    (set-buffer-modified-p nil)
-    (goto-char (point-min))
-    (read-only-mode 1))))
+      (read-only-mode 1))))
 
 
 ;;; Completion
 
-(defvar crate--keys-cache nil
+(defvar crate--keys-cache (make-hash-table :test #'equal)
   "Cached list of lowercase crate names for completion.
 Memoized with a :failed sentinel; cleared by `crate-refresh-cache'.")
 
@@ -586,7 +586,7 @@ The next `find-crate' or completion invocation will reload from
 the database."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
-        crate--keys-cache nil
+        crate--keys-cache (make-hash-table :test 'equal)
         crate-doc--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
 

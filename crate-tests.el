@@ -593,7 +593,7 @@ Substituted at build time by default.nix.")
   "End-to-end: `crate-browse-crates' displays a table with test data."
   (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache nil)
+        (crate--keys-cache (make-hash-table :test 'equal))
         (crate-data-path crate-test--data-file))
     (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer))
       (let ((buf (crate-browse-crates)))
