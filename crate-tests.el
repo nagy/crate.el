@@ -320,6 +320,38 @@ record, not the top-level crate table)."
               (kill-buffer buf))))
       (delete-file tmpfile))))
 
+(ert-deftest crate-visit-hook-runs-after-locals-set ()
+  "`crate-visit-hook' runs once, in the crate buffer, after locals are set."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (crate-visit-hook nil)
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile)
+              (calls nil))
+          (add-hook 'crate-visit-hook
+                    (lambda ()
+                      (push (list (buffer-name)
+                                  crate-name
+                                  (and crate-data
+                                       (gethash "name" crate-data)))
+                            calls)))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname)))))
+            (find-crate "serde")
+            (find-crate "serde"))
+          ;; Hook ran exactly once per visit (2 visits total), in the
+          ;; crate buffer, after crate-name and crate-data were set.
+          (should (= 2 (length calls)))
+          (should (equal (nreverse calls)
+                         '(("Crate: serde" "serde" "serde")
+                           ("Crate: serde" "serde" "serde"))))
+          (when (get-buffer "Crate: serde")
+            (kill-buffer "Crate: serde")))
+      (delete-file tmpfile))))
+
 
 ;;; Interactive commands
 

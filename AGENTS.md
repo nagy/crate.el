@@ -79,14 +79,20 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `crate-doc--json`, `crate-doc--module-tree`)
 5. Helpers (`crate--description`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Major Mode (`crate-mode`, derived from `text-mode`, with
-   `cl-labels` local helper)
+7. Major Mode (`crate-mode`, derived from `text-mode`, thin: only
+   `setq-local` for font-lock defaults, bookmark record function, and
+   `revert-buffer-function`; content is inserted by `crate--render`,
+   which uses the `crate-name` / `crate-data` buffer-locals)
 8. Completion (`crate--keys`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
 9. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
 10. Interactive Commands (`find-crate`, `crate-browse-url`,
-    `crate-install-browse-url-handler`)
+    `crate-install-browse-url-handler`; `find-crate` is the single
+    funnel for all entry points — interactive, URL handler, browse
+    visit, bookmarks, dependency buttons — and runs
+    `crate-visit-hook` at the end, after `crate-name` and
+    `crate-data` are set and the buffer rendered)
 11. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
 12. Org Integration (deferred load of `ol-crate`)
@@ -126,20 +132,28 @@ makes the mode self-contained.
 
 `define-derived-mode` calls `kill-all-local-variables`, which
 wipes all buffer-local bindings before the mode body runs.
-Variables set with `setq-local` before the mode call must carry
-`(put 'var 'permanent-local t)` to survive the wipe:
+`crate-name` and `crate-data` dodge this by being set *after*
+`crate-mode` in `find-crate` (mode first, then `setq-local`, then
+`crate--render`), so they need no `permanent-local`.
+
+`permanent-local` is still used where state must survive a
+re-entrant mode call — the browse-mode filters:
 
 ```elisp
-(defvar-local crate-data nil)
-(put 'crate-data 'permanent-local t)
-
-;; In find-crate:
-(setq-local crate-data ...)  ; survives crate-mode's kill-all-local-variables
-(crate-mode)
+(defvar-local crate-browse--name-list nil)
+(put 'crate-browse--name-list 'permanent-local t)
 ```
 
-Without `permanent-local`, `crate-mode`'s body sees the default
-value (nil) instead of the caller's value.
+Variables set with `setq-local` *before* a mode call that wipes
+locals must carry `(put 'var 'permanent-local t)` to survive:
+
+```elisp
+;; In find-crate (after the separation refactor):
+(crate-mode)
+(setq-local crate-name cand)   ; set after the wipe — survives
+(setq-local crate-data entry)
+(crate--render)
+```
 
 ### Graceful load failures
 
@@ -302,6 +316,10 @@ against it in the `when-let*` binding, not in the body:
 - Tests that need `browse-url-default-handlers` must `(require
   'browse-url)` first — `crate-install-browse-url-handler` uses
   `with-eval-after-load`, which is a no-op if browse-url isn't loaded.
+- `crate-visit-hook` tests bind the hook to nil locally and
+  `add-hook` their lambda, then assert on `(buffer-name)`, `crate-name`,
+  and `crate-data` inside the hook — verifying it fires once per
+  `find-crate` call, in the crate buffer, after locals are set.
 
 ## Dependencies
 
@@ -315,26 +333,6 @@ against it in the `when-let*` binding, not in the body:
 
 ## TODO
 
-- **Render/mode separation** — currently `crate-mode`'s
-  `define-derived-mode` body both sets up the mode *and* inserts
-  all content.  This coupling forces three warts:
-  `permanent-local` on `crate-name` / `crate-data` (because
-  `kill-all-local-variables` runs before the mode body),
-  `revert-buffer-function #'ignore` (revert can't re-render
-  without access to crate locals), and e2e tests that simulate
-  `find-crate` by hand instead of calling it.  The fix:
-  - Extract all `insert`/`propertize`/`insert-text-button`/
-    `font-lock-ensure` logic from the mode body into a standalone
-    `(crate--render)` function that uses `crate-name` and
-    `crate-data` buffer-locals.
-  - Thin `crate-mode` to just `setq-local` (font-lock defaults,
-    `bookmark-make-record-function`, `revert-buffer-function`).
-  - `find-crate` calls `(crate-mode)` first (kills all locals),
-    then `(setq-local crate-name …)` / `(setq-local crate-data …)`
-    *after* (no `permanent-local` needed), then `(crate--render)`.
-  - `revert-buffer-function` becomes `crate--revert`
-    (`erase-buffer` + `crate--render`) — `g` works.
-  - E2e test calls actual `find-crate` and inspects output.
 - **Derive from `special-mode` instead of `text-mode`** — get
   read-only, `q`, `g`, and standard buffer conventions for free;
   drop the manual `read-only-mode 1`.  Pair with render/mode

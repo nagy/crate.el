@@ -107,6 +107,20 @@ and returns a directory path."
                  (function :tag "Mapping function"))
   :group 'crate)
 
+(defcustom crate-visit-hook nil
+  "Hook run after `find-crate' opens a crate detail buffer.
+
+Runs in the Crate: <name> buffer, after `crate-name' and
+`crate-data' have been set (and the buffer rendered).  This is the
+single place all entry points converge: interactive `find-crate',
+crates.io URL handling, `crate-browse-visit', bookmarks, and
+dependency buttons.
+
+Functions may use the buffer-local `crate-name' and `crate-data'
+to, e.g., set `default-directory' to a local checkout."
+  :type 'hook
+  :group 'crate)
+
 ;;; Cache
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
@@ -622,7 +636,8 @@ or switches to an existing one."
         ;; `crate--render' erases first.
         (setq-local crate-name cand)
         (setq-local crate-data entry)
-        (crate--render)))))
+        (crate--render)
+        (run-hooks 'crate-visit-hook)))))
 
 
 ;;;###autoload
