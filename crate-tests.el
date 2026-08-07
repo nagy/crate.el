@@ -210,6 +210,26 @@ record, not the top-level crate table)."
                        "serialization"))))))
 
 
+
+(ert-deftest crate-data-path-setopt-refreshes-cache ()
+  "Setting `crate-data-path' via `setopt' clears the caches."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate--keys-cache (make-hash-table :test 'equal))
+        (crate-doc--cache (make-hash-table :test 'equal))
+        (tmpfile (make-temp-file "crate-test-" nil ".db")))
+    (unwind-protect
+        (progn
+          (puthash 'data :failed crate--data-cache)
+          (puthash "serde" t crate--keys-cache)
+          (puthash "serde" t crate-doc--cache)
+          (setopt crate-data-path tmpfile)
+          (should (equal crate-data-path tmpfile))
+          (should (= (hash-table-count crate--data-cache) 0))
+          (should (= (hash-table-count crate--keys-cache) 0))
+          (should (= (hash-table-count crate-doc--cache) 0)))
+      (delete-file tmpfile))))
+
+
 (ert-deftest crate--keys-caches-empty-db ()
   "`crate--keys' caches a nil result so an empty database isn't re-scanned."
   (let ((crate--keys-cache (make-hash-table :test 'equal)))

@@ -75,6 +75,13 @@ The database should contain a `crates' table with columns:
 name, display_name, description, documentation, homepage,
 repository, created_at, updated_at."
   :type 'file
+  :set (lambda (sym value)
+         (set-default sym value)
+         ;; `crate-refresh-cache' is defined later in the file; the
+         ;; setter also runs at load time during defcustom
+         ;; initialization, before it exists (nothing cached then).
+         (when (fboundp 'crate-refresh-cache)
+           (crate-refresh-cache)))
   :group 'crate)
 
 
