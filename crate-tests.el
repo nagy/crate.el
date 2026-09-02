@@ -534,6 +534,17 @@ record, not the top-level crate table)."
       (should (assoc "htop" entries))
       (should (assoc "neovim" entries)))))
 
+(ert-deftest crate-browse-entries-sorted ()
+  "`crate-browse--entries' returns entries sorted by name (stable order)."
+  (let* ((table (crate-test--crate-table
+                 '("htop" :description "process viewer")
+                 '("ahash" :description "hash")
+                 '("neovim" :description "text editor")))
+         (crate--data-cache (make-hash-table :test 'equal)))
+    (puthash 'data table crate--data-cache)
+    (let ((entries (crate-browse--entries)))
+      (should (equal (mapcar #'car entries) '("ahash" "htop" "neovim"))))))
+
 (ert-deftest crate-browse-entries-filter ()
   "`crate-browse--entries' filters by name-list."
   (let* ((table (crate-test--crate-table

@@ -770,22 +770,30 @@ When nil, all crates are shown.")
                                 "")
                               'face 'crate-description)))))
 
+(defun crate-browse--entry-less (a b)
+  "Return non-nil if tabulated-list entry A sorts before B by name.
+A and B are `tabulated-list-entries' entries whose car is the crate
+name.  Used to make the browse display order deterministic."
+  (declare (side-effect-free t))
+  (string< (car a) (car b)))
+
 (defun crate-browse--entries (&optional name-list)
   "Generate `tabulated-list-entries' for all crates.
 When NAME-LIST is non-nil, only include entries whose names
-appear in the list."
+appear in the list.  The entries are sorted by name so the
+initial display is deterministic (hash iteration order is not)."
   (let ((items (crate--list))
         entries)
     (when items
       (if name-list
-          (dolist (name name-list (nreverse entries))
+          (dolist (name name-list (sort entries #'crate-browse--entry-less))
             (let ((data (gethash name items)))
               (when data
                 (push (crate-browse--entry name data) entries))))
         (maphash (lambda (name data)
                    (push (crate-browse--entry name data) entries))
                  items)
-        (setq entries (nreverse entries))))))
+        (setq entries (sort entries #'crate-browse--entry-less))))))
 
 (defun crate-browse--current-name ()
   "Return the crate name at point, or signal an error."

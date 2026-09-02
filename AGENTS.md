@@ -200,7 +200,12 @@ Functions with no I/O or global state should declare their purity:
 ```
 
 This enables the byte-compiler to optimize calls. Used on
-`crate-doc--module-tree` and `crate-browse--entry`.
+`crate-doc--module-tree`, `crate-browse--entry`, and
+`crate-browse--entry-less`.
+
+`crate-browse--entries` sorts entries by name with
+`crate-browse--entry-less` so the initial browse display is
+deterministic (hash iteration order is unspecified).
 
 ### `defconst` for shared strings
 
