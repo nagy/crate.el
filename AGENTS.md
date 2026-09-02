@@ -265,9 +265,9 @@ where nil is a valid "don't recompute" outcome, use a sentinel:
 
 ### Faces
 
-Six custom faces (`crate-name-face`, `crate-field-label`,
-`crate-url`, `crate-date`, `crate-id`, `crate-description`)
-inherit from `package.el`
+Seven custom faces (`crate-name-face`, `crate-field-label`,
+`crate-url`, `crate-date`, `crate-id`, `crate-version`,
+`crate-description`) inherit from `package.el`
 or standard faces when available, with built-in fallbacks.  No
 `(require 'package)` needed — the `:inherit` list resolves
 left-to-right, skipping undefined faces.

@@ -390,6 +390,11 @@ Inherits from `marginalia-date' when available."
 Inherits from `marginalia-number' when available."
   :group 'crate)
 
+(defface crate-version
+  '((t :inherit (shadow)))
+  "Face for crate versions in `crate-mode' detail buffers."
+  :group 'crate)
+
 (defface crate-description
   '((t :inherit (package-description default)))
   "Face for descriptions in `crate-browse-mode'.
@@ -406,6 +411,9 @@ Inherits from `package-description' when available."
     ;; Description value
     ("^Description:[[:space:]]+\\(.+\\)"
      (1 'crate-description))
+    ;; Version value
+    ("^Version:[[:space:]]+\\(.+\\)"
+     (1 'crate-version))
     ;; URLs on Homepage/Documentation/Repository lines
     ("^\\(?:Homepage\\|Documentation\\|Repository\\):[[:space:]]+\\(https?://[^[:space:]\n]+\\)"
      (1 'crate-url nil t))
