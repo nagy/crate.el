@@ -3,8 +3,8 @@
 ## Overview
 
 Single-package Emacs project (`crate.el`) providing an interactive
-interface for browsing Rust crates from a local `static.crates.io`
-JSON dump.  Browse URL handler integration redirects crates.io
+interface for browsing Rust crates from a local crates.io SQLite
+database.  Browse URL handler integration redirects crates.io
 URLs to `find-crate`.
 
 ## Build & test
@@ -223,13 +223,13 @@ The completion collection function (`crate--collection`) returns
 `(metadata (category . crate) (annotation-function . ...))` for
 the `metadata` action.  This gives Marginalia and Embark a
 category to hook into.  Crate names are cached in
-`crate--keys-cache` to avoid rebuilding the list from the JSON
+`crate--keys-cache` to avoid rebuilding the list from the cache
 hash on every keystroke.
 
 ### Memoization
 
 JSON data and crate structure results use `with-memoization`
-on `(gethash key hash-table)`.  Since the JSON dump is a
+on `(gethash key hash-table)`.  Since the SQLite database is a
 static file on disk, results never go stale.
 
 ```elisp

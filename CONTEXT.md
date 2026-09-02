@@ -1,7 +1,7 @@
 # crate.el — Browse Rust Crates in Emacs
 
 A text-based, Emacs-native equivalent of docs.rs, backed by a local
-`static.crates.io` JSON dump with on-demand rustdoc builds via Nix.
+crates.io SQLite database with on-demand rustdoc builds via Nix.
 
 ## Language
 
@@ -11,7 +11,7 @@ _Avoid_: Package, library, project
 
 **Crate metadata**:
 Name, description, homepage, repository, version, and other fields from
-the `static.crates.io` JSON dump. Always available once the dump is
+the crates.io SQLite database. Always available once the database is
 loaded — no build required.
 
 **Module tree**:

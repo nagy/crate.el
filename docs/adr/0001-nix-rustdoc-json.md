@@ -16,8 +16,8 @@ buffer that displays the crate metadata.
 - **Parse source from `.crate` tarballs with tree-sitter.** No compilation
   required, but tree-sitter grammars don't expose type resolution or trait
   impls — the result is shallow.
-- **Accept the gap.** Module structure from `cargo-modules` plus a link to
-  docs.rs is the 80% solution, but we want the richer experience.
+- **Accept the gap.** A shallow link-out to docs.rs is the 80% solution,
+  but we want the richer in-buffer experience.
 - **Pre-build a top-N set of crates.** Solves the wait-time problem but
   limits coverage; users of less-popular crates get nothing.  The on-demand
   approach covers every crate.
@@ -31,5 +31,5 @@ buffer that displays the crate metadata.
 - The nightly toolchain is pinned via the `rust-bin` overlay (oxalica),
   fetched alongside Crane.  This dependency is expected to be temporary
   once `--output-format json` stabilizes.
-- Module-structure display via `cargo-modules` is retained as the fallback
-  when the doc-building defcustom is disabled.
+- When the doc-building defcustom is disabled, the crate detail buffer
+  simply omits the module tree section.

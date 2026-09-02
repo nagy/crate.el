@@ -5,7 +5,7 @@
 [[https://github.com/nagy/crate.el/raw/screenshot/emacs-screenshot.svg]]
 
 crate.el provides an interactive =completing-read= interface for
-browsing Rust crates from a local =static.crates.io= JSON dump.
+browsing Rust crates from a local crates.io SQLite database.
 Optional on-demand rustdoc builds via Nix for module tree display.
 
 * Features
@@ -19,8 +19,8 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 
 * Usage
 
-Set =crate-data-path= to the location of your JSON dump, then use
-=M-x find-crate= to look up a Rust crate.
+Set =crate-data-path= to the location of your =crates-io.db= SQLite
+database, then use =M-x find-crate= to look up a Rust crate.
 
 To enable the browse URL handler:
 
