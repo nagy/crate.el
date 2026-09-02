@@ -232,10 +232,9 @@ completes."
 Builds the JSON on-demand via `crate-doc--build' and caches the
 result.  Returns nil if docs cannot be built, the crate has no
 JSON output, or a prior build attempt already failed."
-  (when (and crate-doc-enable
-             (crate--list)
-             (gethash name (crate--list)))
-    (let ((cached (with-memoization (gethash name crate-doc--cache)
+  (when-let* ((table (and crate-doc-enable (crate--list))))
+    (when (gethash name table)
+      (let ((cached (with-memoization (gethash name crate-doc--cache)
                     ;; Return :failed sentinel so with-memoization
                     ;; doesn't retry builds that already failed.
                     (or (when-let* ((store-path (crate-doc--build name)))
@@ -257,7 +256,7 @@ JSON output, or a prior build attempt already failed."
                                       (error nil))))))))
                         :failed))))
       (unless (eq cached :failed)
-        cached))))
+        cached)))))
 
 (defun crate-doc--module-tree (json)
   "Return the module tree from rustdoc JSON.
