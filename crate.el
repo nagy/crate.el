@@ -395,6 +395,11 @@ Inherits from `marginalia-number' when available."
   "Face for crate versions in `crate-mode' detail buffers."
   :group 'crate)
 
+(defface crate-license
+  '((t :inherit (shadow)))
+  "Face for crate license values in `crate-mode' detail buffers."
+  :group 'crate)
+
 (defface crate-description
   '((t :inherit (package-description default)))
   "Face for descriptions in `crate-browse-mode'.
@@ -414,6 +419,9 @@ Inherits from `package-description' when available."
     ;; Version value
     ("^Version:[[:space:]]+\\(.+\\)"
      (1 'crate-version))
+    ;; License value
+    ("^License:[[:space:]]+\\(.+\\)"
+     (1 'crate-license))
     ;; URLs on Homepage/Documentation/Repository lines
     ("^\\(?:Homepage\\|Documentation\\|Repository\\):[[:space:]]+\\(https?://[^[:space:]\n]+\\)"
      (1 'crate-url nil t))
@@ -439,7 +447,7 @@ dependency crate name as a link to its crates.io page.  Returns nil
 unless point is on text carrying a `crate-url' property."
   (get-text-property (point) 'crate-url))
 
-(define-derived-mode crate-mode text-mode "Crate"
+(define-derived-mode crate-mode special-mode "Crate"
   "Major mode for displaying Rust crate details.
 
 \\{crate-mode-map}
@@ -528,7 +536,7 @@ Each item is (NAME KIND CHILDREN DOC)."
               (setq-local default-directory dir)))))
       (insert "\n")
       ;; Documentation (with docs.rs fallback)
-      (insert (propertize "Documentation: " 'face 'crate-field-label))
+      (insert "Documentation: ")
       (let ((doc (gethash "documentation" crate-data)))
         (if (and doc (not (eq doc :null)))
             (insert doc)
@@ -577,8 +585,7 @@ Each item is (NAME KIND CHILDREN DOC)."
                                '(mouse-face highlight))))
       (font-lock-ensure)
       (set-buffer-modified-p nil)
-      (goto-char (point-min))
-      (read-only-mode 1))))
+      (goto-char (point-min)))))
 
 
 ;;; Completion
@@ -732,7 +739,7 @@ and delegates to `find-crate'."
 \\[crate-browse-refresh] to reload the data."
   :interactive nil
   (setq tabulated-list-format
-        [("Crate" 40 t) ("Description" 0 nil)])
+        [("Crate" 40 t) ("Version" 12 t) ("Description" 0 nil)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key '("Crate" . nil))
   (tabulated-list-init-header)
@@ -752,9 +759,11 @@ When nil, all crates are shown.")
 (defun crate-browse--entry (name data)
   "Return a `tabulated-list' entry for crate NAME with DATA."
   (declare (side-effect-free t))
-  (let ((desc (gethash "description" data)))
+  (let ((desc (gethash "description" data))
+        (version (gethash "latest_version" data)))
     (list name
           (vector (propertize name 'face 'crate-name-face)
+                  (propertize (or version "") 'face 'crate-version)
                   (propertize (if (and desc (not (eq desc :null)))
                                   (string-limit (string-replace "\n" " " desc)
                                                 crate-annotation-width)

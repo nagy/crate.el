@@ -478,7 +478,8 @@ record, not the top-level crate table)."
 (ert-deftest crate-face-definitions ()
   "All custom faces are defined and inherit from known faces."
   (dolist (face '(crate-name-face crate-field-label crate-url crate-date
-                                  crate-id crate-description))
+                                  crate-id crate-version crate-license
+                                  crate-description))
     (should (facep face))
     (should (face-attribute face :inherit))))
 
@@ -512,12 +513,14 @@ record, not the top-level crate table)."
 
 (ert-deftest crate-browse-entry ()
   "`crate-browse--entry' returns a proper tabulated-list entry."
-  (let ((data (crate-test--data-hash :description "A test crate")))
+  (let ((data (crate-test--data-hash :description "A test crate"
+                                     :latest_version "1.0.188")))
     (let ((entry (crate-browse--entry "test-crate" data)))
       (should (equal (car entry) "test-crate"))
       (let ((cols (cadr entry)))
         (should (equal (aref cols 0) "test-crate"))
-        (should (equal (aref cols 1) "A test crate"))))))
+        (should (equal (aref cols 1) "1.0.188"))
+        (should (equal (aref cols 2) "A test crate"))))))
 
 (ert-deftest crate-browse-entries ()
   "`crate-browse--entries' generates entries from `crate--list'."
@@ -547,8 +550,8 @@ record, not the top-level crate table)."
   (with-temp-buffer
     (crate-browse-mode)
     (setq tabulated-list-entries
-          (list (list "htop" ["htop" "process viewer"])
-                (list "neovim" ["neovim" "text editor"])))
+          (list (list "htop" ["htop" "3.0" "process viewer"])
+                (list "neovim" ["neovim" "0.10" "text editor"])))
     (tabulated-list-print)
     (goto-char (point-min))
     (should (equal (crate-browse--current-name) "htop"))))

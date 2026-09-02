@@ -79,7 +79,8 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `crate-doc--json`, `crate-doc--module-tree`)
 5. Helpers (`crate--description`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Major Mode (`crate-mode`, derived from `text-mode`, thin: only
+7. Major Mode (`crate-mode`, derived from `special-mode` for
+   read-only + `q`/`g` conventions, thin: only
    `setq-local` for font-lock defaults, bookmark record function, and
    `revert-buffer-function`; content is inserted by `crate--render`,
    which uses the `crate-name` / `crate-data` buffer-locals)
@@ -263,14 +264,24 @@ where nil is a valid "don't recompute" outcome, use a sentinel:
   (gethash "key" result) …)
 ```
 
-### Faces
+### Faces, display faces, and font-lock keywords
 
-Seven custom faces (`crate-name-face`, `crate-field-label`,
+Nine custom faces (`crate-name-face`, `crate-field-label`,
 `crate-url`, `crate-date`, `crate-id`, `crate-version`,
-`crate-description`) inherit from `package.el`
+`crate-license`, `crate-description`) inherit from `package.el`
 or standard faces when available, with built-in fallbacks.  No
 `(require 'package)` needed — the `:inherit` list resolves
 left-to-right, skipping undefined faces.
+
+**Value faces must be declared as `crate-font-lock-keywords` rules,
+not set via `propertize`.  `crate-mode` calls `font-lock-ensure`
+after rendering, so a `face` text property on text that no keyword
+matches is wiped by re-fontification (a plain `propertize` face on
+the version value becomes nil).  This is why the version/date/id/
+description/URL value faces all live in `crate-font-lock-keywords`
+as `(1 'face)` group 1 rules on `^Label:[[:space:]]+` patterns.
+Where a text property is genuinely needed (e.g. `mouse-face` on
+URLs), use non-`face` properties.
 
 ### `thing-at-point` URL provider for dependency names
 
@@ -360,16 +371,8 @@ against it in the `when-let*` binding, not in the body:
 
 ## TODO
 
-- **Derive from `special-mode` instead of `text-mode`** — get
-  read-only, `q`, `g`, and standard buffer conventions for free;
-  drop the manual `read-only-mode 1`.  Pair with render/mode
-  separation above (mode init vs. content insertion split
-  already done).
 - **Completion-at-point for `Cargo.toml`** — provide crate name
   completion in `[dependencies]` sections of `Cargo.toml` buffers.
   Hook into `completion-at-point-functions` with a custom function
   that queries `crate--keys` for matching crate names.  Would make
   crate.el a genuine Rust developer tool.
-- **Render rustdoc JSON in `crate-mode`** — parse the module tree
-  from the JSON output of `crate-doc.nix` and display it in the
-  crate detail buffer.  Done.
