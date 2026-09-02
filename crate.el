@@ -58,6 +58,7 @@
 
 
 (defvar browse-url-default-handlers)
+(defvar thing-at-point-provider-alist)
 
 (defvar-local crate-name nil)
 (defvar-local crate-data nil)
@@ -422,6 +423,14 @@ Inherits from `package-description' when available."
 ;;; Major Mode
 
 ;;;###autoload
+(defun crate--thing-at-point-url ()
+  "Return the crates.io URL for a dependency crate name at point.
+Used as a `thing-at-point-provider-alist' entry for `crate-mode'
+so `thing-at-point \\='url' (and `browse-url-at-point') treat a
+dependency crate name as a link to its crates.io page.  Returns nil
+unless point is on text carrying a `crate-url' property."
+  (get-text-property (point) 'crate-url))
+
 (define-derived-mode crate-mode text-mode "Crate"
   "Major mode for displaying Rust crate details.
 
@@ -433,6 +442,11 @@ This mode is not intended to be invoked directly; use
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'crate--revert)
+  ;; Make dependency crate names detectable as crates.io URLs by
+  ;; `thing-at-point' / `browse-url-at-point'.
+  (setq-local thing-at-point-provider-alist
+              (cons '(url . crate--thing-at-point-url)
+                    thing-at-point-provider-alist))
   ;; `crate-data' is set after the mode (by `find-crate'), so the
   ;; description isn't available here; `crate--render' fills the buffer.
   (setq-local list-buffers-directory nil))
@@ -536,12 +550,12 @@ Each item is (NAME KIND CHILDREN DOC)."
                                (or (nth 1 d) "") kind
                                (if (eq (nth 3 d) 1) "  (optional)" "")))
                  (pad (- 40 (length dname))))
-            (insert "  ")
             (insert-text-button dname
                                 'action (lambda (_) (find-crate dname))
                                 'follow-link t
                                 'face 'crate-url
-                                'help-echo (format "View crate: %s" dname))
+                                'help-echo (format "View crate: %s" dname)
+                                'crate-url (concat crate--crates-io-url dname))
             (insert (make-string (max pad 1) ?\s) rest "\n"))))
       ;; Module structure from rustdoc JSON.
       (when-let* ((doc-json (crate-doc--json crate-name)))

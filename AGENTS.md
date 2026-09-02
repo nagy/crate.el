@@ -272,6 +272,33 @@ or standard faces when available, with built-in fallbacks.  No
 `(require 'package)` needed — the `:inherit` list resolves
 left-to-right, skipping undefined faces.
 
+### `thing-at-point` URL provider for dependency names
+
+Dependency crate-name buttons in `crate-mode` carry a `crate-url`
+text property set to their crates.io URL.  `crate-mode` installs a
+buffer-local `thing-at-point-provider-alist` entry for `url` whose
+provider (`crate--thing-at-point-url`) reads that property, so
+`thing-at-point \\='url'` and `browse-url-at-point` treat a dependency
+name as a link to its crates.io page:
+
+```elisp
+;; In crate-mode body:
+(setq-local thing-at-point-provider-alist
+            (cons '(url . crate--thing-at-point-url)
+                  thing-at-point-provider-alist))
+
+;; Tag each dependency button with its URL:
+(insert-text-button dname
+                    'action (lambda (_) (find-crate dname))
+                    'face 'crate-url
+                    'crate-url (concat crate--crates-io-url dname))
+```
+
+`thing-at-point-provider-alist` is defined by `thingatpt` (not
+required by `crate.el`), so declare it value-less at top level to
+silence the byte-compiler.  The provider only uses text properties
+at point, so it returns nil on any non-button text.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via

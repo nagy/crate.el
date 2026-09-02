@@ -27,6 +27,7 @@
 (require 'ol-crate)
 (require 'ert)
 (require 'cl-lib)
+(require 'thingatpt)
 
 
 ;;; Helpers
@@ -152,6 +153,22 @@ record, not the top-level crate table)."
                                   (should (string-match-p "docs\\.rs/test-crate" content))
                                   ;; Updated has no key → label only.
                                   (should (string-match-p "Updated: *\n" content))))))))
+
+(ert-deftest crate-mode-deps-url-at-point ()
+  "Dependency crate names are `thing-at-point' `url' detectable."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1.0" "normal" 0)))))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash :name "test-crate"))
+        (crate--render)
+        (goto-char (point-min))
+        (search-forward "serde")
+        (goto-char (match-beginning 0))
+        (should (equal (thing-at-point 'url t)
+                       (concat crate--crates-io-url "serde")))))))
 
 
 ;;; Cache
