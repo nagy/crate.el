@@ -561,7 +561,7 @@ Each item is (NAME KIND CHILDREN DOC)."
         (dolist (d deps)
           (let* ((dname (nth 0 d))
                  (kind (nth 2 d))
-                 (rest (format " %-12s %-8s%s"
+                 (rest (format "%-12s %-8s%s"
                                (or (nth 1 d) "") kind
                                (if (eq (nth 3 d) 1) "  (optional)" "")))
                  (pad (- 40 (length dname))))
