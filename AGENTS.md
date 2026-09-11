@@ -10,9 +10,20 @@ URLs to `find-crate`.
 ## Build & test
 
 ```sh
-nix-build --no-out-link default.nix          # build
+nix build                       # build
+nix flake check                 # build + ERT suite
+nix build .#screenshot          # regenerate README screenshot
+nix build .#gitrepo             # bare .git dir holding the screenshot
+nix develop                     # dev shell (Emacs, Nix, sqlite)
 emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
 ```
+
+Flake outputs: `packages.crate` (= `default`) is `nix/default.nix`
+(`melpaBuild`); its `checkPhase` runs the ERT suite against
+`nix/test-crates-db.nix`.  `packages.screenshot` and `packages.gitrepo`
+come from `nix/emacs-screenshot.nix`, which uses
+`mkGitRepository` imported from the `nur-packages` flake input (not
+vendored).
 
 Byte-compile with warnings as errors (wired into the Nix
 build's checkPhase):
@@ -28,10 +39,13 @@ Files:
 
 - `crate.el` — main package
 - `ol-crate.el` — Org link support
-- `crate-doc.nix` — Nix expression for rustdoc JSON builds
+- `nix/crate-doc.nix` — Nix expression for rustdoc JSON builds
 - `crate-tests.el` — ERT test suite
-- `default.nix` — Nix build
-- `emacs-screenshot.nix` — Nix expression for screenshot generation
+- `nix/default.nix` — package expression (`melpaBuild`)
+- `nix/test-crates-db.nix` — fixture SQLite database for tests/screenshots
+- `nix/emacs-screenshot.nix` — Nix expression for screenshot generation
+- `flake.nix` — flake outputs; package expressions live under `nix/`
+- `flake.lock` — pinned nixpkgs/flake-parts/nur-packages inputs
 - `README.org` — project README with screenshot
 - `CONTEXT.md` — domain glossary
 - `LICENSE` — AGPLv3
@@ -39,11 +53,13 @@ Files:
 
 ### Rustdoc JSON pipeline
 
-1. **`crate-doc.nix`** — companion Nix file. Uses a pinned crates.io-index
+1. **`nix/crate-doc.nix`** — companion Nix file. Uses a pinned crates.io-index
    to generate Cargo.lock offline (sandbox-safe), then crane + nightly
    rustc runs `cargo doc --output-format json`. Fully sandboxed.
 2. **`crate-doc--build`** — calls `nix-build` synchronously, returns
-   the Nix store output path.
+   the Nix store output path.  `crate-doc--nix-path` looks for
+   `crate-doc.nix` next to `crate.el` and then in `nix/` (the source
+   tree keeps the file under `nix/`).
 3. **`crate-doc--json`** — parses the JSON, memoized with `:failed`
    sentinel to avoid retrying failed builds.
 4. **`crate-doc--module-tree`** — pure function, parses JSON into nested
@@ -310,10 +326,11 @@ name as a link to its crates.io page:
                     'crate-url (concat crate--crates-io-url dname))
 ```
 
-`thing-at-point-provider-alist` is defined by `thingatpt` (not
-required by `crate.el`), so declare it value-less at top level to
-silence the byte-compiler.  The provider only uses text properties
-at point, so it returns nil on any non-button text.
+`thing-at-point-provider-alist` is defined by `thingatpt`, which
+`crate.el` requires explicitly — a value-less `defvar` alone leaves
+the variable void and `setq-local` signals in a bare Emacs.  The
+provider only uses text properties at point, so it returns nil on
+any non-button text.
 
 ### Org link support
 
@@ -372,7 +389,7 @@ against it in the `when-let*` binding, not in the body:
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
-| nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `crate-doc.nix` for on-demand rustdoc JSON |
+| nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `nix/crate-doc.nix` for on-demand rustdoc JSON |
 
 ## TODO
 

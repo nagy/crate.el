@@ -1,29 +1,28 @@
+# emacs-screenshot.nix — render the README screenshot.
+#
+# Composes the package under test with a fixture SQLite database,
+# boots Emacs under Xvfb, drives it to the `Crate: serde' buffer and
+# exports the frame.  Both dependencies are passed in by the flake so
+# this expression never re-evaluates nix/default.nix.
+
 {
   pkgs ? import <nixpkgs> { },
   lib ? pkgs.lib,
   emacs ? pkgs.emacs,
+  # The built crate.el package, needed inside the screenshot Emacs.
+  crateEl,
+  # Fixture crates-io.db (nix/test-crates-db.nix) used as
+  # `crate-data-path' so no real database is required.
+  testCratesDb,
+  # lib from the nur-packages flake input; supplies mkGitRepository,
+  # which turns the SVG into a bare `.git' directory for the README.
+  nurLib,
 }:
 
 let
-  crateEl = pkgs.callPackage ./default.nix { inherit emacs; };
-
-  testCratesJson = pkgs.writeText "crates.json" ''
-    {
-      "serde": {
-        "created_at": "2020-01-09 20:22:35.387945+00",
-        "description": "A generic serialization/deserialization framework",
-        "documentation": "https://docs.rs/serde",
-        "homepage": "https://serde.rs",
-        "id": 11646.0,
-        "max_features": null,
-        "max_upload_size": null,
-        "name": "serde",
-        "repository": "https://github.com/serde-rs/serde",
-        "trustpub_only": false,
-        "updated_at": "2026-06-27 22:26:12.785151+00"
-      }
-    }
-  '';
+  # Emacs reads the SQLite database directly now (no JSON dump), so
+  # point it at the store path of the fixture database.
+  testCratesDbPath = testCratesDb;
 in
 rec {
   mkEmacsScreenshot =
@@ -37,6 +36,10 @@ rec {
       {
         NIX_PATH = "nixpkgs=${pkgs.path}";
         NIX_STATE_DIR = "/build/nix-state";
+        # The sandbox has no dconf/gsettings database; without this the
+        # GTK init makes GLib criticals noisy (and Emacs sometimes exits
+        # before the frame is exported).
+        GSETTINGS_BACKEND = "memory";
         nativeBuildInputs = [
           (emacs.pkgs.withPackages (epkgs: [
             epkgs.modus-themes
@@ -86,7 +89,7 @@ rec {
       emacsCode = ''
         (require 'crate)
         (require 'marginalia)
-        (setq crate-data-path "${testCratesJson}")
+        (setq crate-data-path "${testCratesDbPath}")
         (defun screenshot-poll ()
           "Poll until the crate buffer is displayed, then capture."
           (when (get-buffer "*Warnings*")
@@ -171,6 +174,6 @@ rec {
         })
       );
 
-  gitrepo = pkgs.nur.repos.nagy.lib.mkGitRepository svg;
+  gitrepo = nurLib.mkGitRepository svg;
 
 }

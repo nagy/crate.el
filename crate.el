@@ -54,6 +54,9 @@
 (require 'bookmark)
 (require 'json)
 (require 'cl-lib)
+;; `thing-at-point-provider-alist' is defined here; crate-mode sets it
+;; buffer-locally, so the file must be loaded for the variable to exist.
+(require 'thingatpt)
 
 
 
@@ -203,12 +206,14 @@ Memoized — cleared by `crate-refresh-cache'.")
 (defun crate-doc--nix-path ()
   "Return the absolute path to the companion crate-doc.nix file.
 Uses `locate-library' to find it relative to crate.el on
-`load-path'.  Returns nil if the file cannot be found."
+`load-path' (the source tree keeps it in the nix/ subdirectory,
+the installed package next to crate.el).  Returns nil if the file
+cannot be found."
   (when-let* ((lib (locate-library "crate"))
-              (dir (file-name-directory lib))
-              (nix (expand-file-name "crate-doc.nix" dir)))
-    (when (file-exists-p nix)
-      nix)))
+              (dir (file-name-directory lib)))
+    (seq-find #'file-exists-p
+              (list (expand-file-name "crate-doc.nix" dir)
+                    (expand-file-name "nix/crate-doc.nix" dir)))))
 
 (defun crate-doc--build (name)
   "Build rustdoc JSON for crate NAME via nix-build.

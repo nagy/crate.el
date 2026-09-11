@@ -1,13 +1,20 @@
+# test-crates-db.nix — fixture SQLite database for crate.el tests.
+#
+# Schema mirrors the real crates-io.db produced by the crates.io
+# dumps (STRICT tables, WITHOUT ROWID on the primary key).  Tests
+# point `crate-data-path' at this file instead of the real database
+# so they never touch the network or the user's data.
+
 {
   pkgs ? import <nixpkgs> { },
   lib ? pkgs.lib,
-  emacs ? pkgs.emacs,
-  emacsPackages ? emacs.pkgs,
-  melpaBuild ? emacsPackages.melpaBuild,
 }:
 
-let
-  testCratesDb = pkgs.runCommandLocal "test-crates.db" { nativeBuildInputs = [ pkgs.sqlite ]; } ''
+pkgs.runCommandLocal "test-crates.db"
+  {
+    nativeBuildInputs = [ pkgs.sqlite ];
+  }
+  ''
     sqlite3 $out <<'SQLEOF'
     CREATE TABLE crates (
       name TEXT PRIMARY KEY,
@@ -60,48 +67,4 @@ let
     INSERT INTO dependencies VALUES (1, 'serde', 'serde_core', '=1.0.228', 'normal', 0);
     INSERT INTO dependencies VALUES (2, 'serde', 'serde_derive', '^1', 'normal', 1);
     SQLEOF
-  '';
-in
-
-melpaBuild {
-  pname = "crate";
-  version = "0.1.0";
-  src = lib.cleanSource ./.;
-
-  packageRequires = [ ];
-
-  turnCompilationWarningToError = true;
-
-  postPatch = ''
-    substituteInPlace crate-tests.el \
-      --replace-fail '@testCratesDb@' ${testCratesDb}
-  '';
-
-  checkPhase = ''
-    runHook preCheck
-    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-      -f batch-byte-compile crate.el
-    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-      -f batch-byte-compile crate-tests.el
-    emacs --batch -L . \
-      -l crate-tests.el \
-      -f ert-run-tests-batch-and-exit
-    runHook postCheck
-  '';
-
-  doCheck = true;
-
-  meta = {
-    description = "Browse Rust crates from Emacs";
-    longDescription = ''
-      Provides an interactive interface for browsing Rust crates
-      from a local crates.io SQLite database.  Includes a major
-      mode for viewing crate details, bookmark support, Org link
-      integration, and a browse-url handler for crates.io URLs.
-    '';
-    license = lib.licenses.agpl3Plus;
-    homepage = "https://github.com/nagy/crate.el";
-    maintainers = with lib.maintainers; [ nagy ];
-    platforms = lib.platforms.unix;
-  };
-}
+  ''
