@@ -14,9 +14,10 @@ nix build                       # build
 nix flake check                 # build + ERT suite
 nix build .#screenshot          # regenerate README screenshot
 nix build .#gitrepo             # bare .git dir holding the screenshot
-nix develop                     # dev shell (Emacs, Nix, sqlite)
 emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
 ```
+
+Dev shell tools: Emacs, Nix, sqlite.
 
 Flake outputs: `packages.crate` (= `default`) is `nix/default.nix`
 (`melpaBuild`); its `checkPhase` runs the ERT suite against
