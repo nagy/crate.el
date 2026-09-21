@@ -822,8 +822,9 @@ initial display is deterministic (hash iteration order is not)."
         (crate-browse--entries crate-browse--name-list))
   (tabulated-list-print t))
 
-(defun crate--filter-by-prefix (name-prefix)
-  "Return a list of crate names from the live cache matching NAME-PREFIX."
+(defun crate--filter-by-name (name-prefix)
+  "Return a list of crate names from the live cache matching NAME-PREFIX.
+NAME-PREFIX matches as a substring (not a prefix)."
   (let ((names nil)
         (items (crate--list)))
     (when items
@@ -847,7 +848,7 @@ added crates appear on reopen."
   (let ((name-prefix (bookmark-prop-get bookmark 'name-prefix))
         name-list)
     (when name-prefix
-      (setq name-list (crate--filter-by-prefix name-prefix)))
+      (setq name-list (crate--filter-by-name name-prefix)))
     (crate-browse-crates name-list name-prefix)))
 
 ;;;###autoload
