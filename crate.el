@@ -664,8 +664,9 @@ the database."
   "Display details for the Rust crate NAME in `crate-mode'.
 When called interactively, prompt for a crate name with
 completion.  If NAME is a crates.io URL, the URL prefix is
-stripped first.  Creates a new buffer named \"Crate: <name>\"
-or switches to an existing one."
+stripped first; a trailing version path segment is dropped with a
+message naming the requested version.  Creates a new buffer named
+\"Crate: <name>\" or switches to an existing one."
   (interactive)
   (let ((cand (or name
                   (completing-read "crate> " #'crate--collection))))
@@ -673,7 +674,12 @@ or switches to an existing one."
     (when (string-prefix-p crate--crates-io-url cand)
       (setq cand (string-remove-prefix crate--crates-io-url cand))
       (when-let* ((slash (string-search "/" cand)))
-        (setq cand (substring cand 0 slash))))
+        ;; Don't drop the version silently — surface it.
+        (let ((version (substring cand (1+ slash))))
+          (setq cand (substring cand 0 slash))
+          (unless (string-empty-p version)
+            (message "crate: requested version %s ignored (showing latest)"
+                     version)))))
     (setq cand (crate--canonical-name cand))
     (let* ((data (crate--list))
            (entry (when data (gethash cand data))))

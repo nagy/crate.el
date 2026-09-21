@@ -362,6 +362,29 @@ record, not the top-level crate table)."
     (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
       (should-error (find-crate "nonexistent") :type 'user-error))))
 
+(ert-deftest crate-find-crate-versioned-url-surfaces-version ()
+  "A versioned crates.io URL resolves the crate and surfaces the dropped version."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (msg nil)
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname))))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq msg (apply #'format fmt args)))))
+            (find-crate "https://crates.io/crates/serde/1.0.200")
+            ;; Version path stripped: canonical crate buffer exists…
+            (should (get-buffer "Crate: serde"))
+            ;; …and the requested version surfaced, not swallowed.
+            (should (and msg (string-match-p "1\\.0\\.200" msg)))
+            (kill-buffer (get-buffer "Crate: serde"))))
+      (delete-file tmpfile))))
+
 (ert-deftest crate-find-crate-no-db-error ()
   "Missing `crate-data-path' blames the configuration, not the crate name."
   (let ((crate--data-cache (make-hash-table :test 'equal))
