@@ -374,6 +374,10 @@ against it in the `when-let*` binding, not in the body:
 - When mocking `org-link-store-props`, use a `&rest` lambda and
   `plist-get` to extract `:type` and `:link` — the real function
   uses `&key` which doesn't compose with `cl-letf` closures.
+- Bookmark handler tests must pass the full record shape
+  `(NAME (prop . val) ...)` — `bookmark-prop-get` returns nil on
+  bare alists (no name-string car), matching what
+  `bookmark-handle-bookmark` really passes to handlers.
 - Tests that need `browse-url-default-handlers` must `(require
   'browse-url)` first — `crate-install-browse-url-handler` uses
   `with-eval-after-load`, which is a no-op if browse-url isn't loaded.

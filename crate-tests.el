@@ -611,7 +611,10 @@ record, not the top-level crate table)."
               ((symbol-function 'crate-browse-crates)
                (lambda (&optional name-list name-prefix)
                  (setq called-names name-list called-prefix name-prefix))))
-      (crate-browse--bookmark-jump '((name-prefix . "serde")
+      ;; Full record shape (name first), as `bookmark-handle-bookmark'
+      ;; passes to handlers — `bookmark-prop-get' requires it.
+      (crate-browse--bookmark-jump '("Crates: serde"
+                                     (name-prefix . "serde")
                                      (handler . crate-browse--bookmark-jump)))
       (should (equal (sort called-names #'string<) '("serde" "serde_derive")))
       (should (equal called-prefix "serde")))))
@@ -623,7 +626,8 @@ record, not the top-level crate table)."
               ((symbol-function 'crate-browse-crates)
                (lambda (&optional name-list name-prefix)
                  (setq called-names name-list called-prefix name-prefix))))
-      (crate-browse--bookmark-jump '((name-prefix . nil)
+      (crate-browse--bookmark-jump '("Crates: all"
+                                     (name-prefix . nil)
                                      (handler . crate-browse--bookmark-jump)))
       (should-not called-names)
       (should-not called-prefix))))

@@ -844,7 +844,7 @@ initial display is deterministic (hash iteration order is not)."
   "Restore a crate browse BOOKMARK.
 Re-derives the filtered name-list from the live cache so newly
 added crates appear on reopen."
-  (let ((name-prefix (alist-get 'name-prefix bookmark))
+  (let ((name-prefix (bookmark-prop-get bookmark 'name-prefix))
         name-list)
     (when name-prefix
       (setq name-list (crate--filter-by-prefix name-prefix)))
