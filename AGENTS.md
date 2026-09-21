@@ -101,7 +101,8 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `crate-data-path` for self-invalidation)
 4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--build`,
    `crate-doc--json`, `crate-doc--module-tree`)
-5. Helpers (`crate--description`)
+5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
+   `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
 7. Major Mode (`crate-mode`, derived from `special-mode` for
    read-only + `q`/`g` conventions, thin: only

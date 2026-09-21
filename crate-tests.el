@@ -271,6 +271,34 @@ Covers `crate--list' and `crate--keys' across nil -> db1 -> db2 switches."
       (let ((crate-data-path "/db2.db"))
         (should (equal (caar (crate--deps "serde")) "dep-of-/db2.db"))))))
 
+(ert-deftest crate--dependents-reverse-query ()
+  "`crate--dependents' queries dependencies by dep_name."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (_db sql &rest _)
+                 (when (string-match-p "WHERE dep_name" sql)
+                   (list (list "tokio") (list "axum")))))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (let ((crate-data-path "/db1.db"))
+        (should (equal (crate--dependents "serde") '("tokio" "axum")))))))
+
+(ert-deftest crate-mode-renders-dependents ()
+  "Dependents render as a clickable section in `crate-mode'."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--dependents)
+               (lambda (_name) '("tokio" "axum"))))
+      (crate-test--with-crate "serde"
+                              (crate-test--data-hash :name "serde")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (let ((content (buffer-string)))
+            (should (string-match-p "Dependents:" content))
+            (should (string-match-p "tokio" content))
+            (should (string-match-p "axum" content))))))))
+
 
 (ert-deftest crate--keys-caches-empty-db ()
   "`crate--keys' caches a nil result so an empty database isn't re-scanned."

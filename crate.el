@@ -368,6 +368,29 @@ rows) are cached."
       (unless (eq cached :failed)
         cached))))
 
+(defun crate--dependents (name)
+  "Return the names of crates depending on crate NAME.
+A reverse lookup on the `dependencies' table.  Memoized like
+`crate--deps', keyed by database path with a :failed sentinel."
+  (when (and crate-data-path (file-exists-p crate-data-path))
+    (let ((cached
+           (with-memoization
+               (gethash (list 'dependents crate-data-path name) crate--data-cache)
+             (condition-case nil
+                 (let ((db (sqlite-open crate-data-path)))
+                   (unwind-protect
+                       (mapcar #'car
+                               (sqlite-select
+                                db
+                                "SELECT DISTINCT crate_name
+                             FROM dependencies WHERE dep_name = ?
+                                  ORDER BY crate_name"
+                                (list name)))
+                     (sqlite-close db)))
+               (error :failed)))))
+      (unless (eq cached :failed)
+        cached))))
+
 (defun crate--format-downloads (n)
   "Format N as a human-readable download count."
   (cond
@@ -602,6 +625,17 @@ bracketed tag before the name."
                                 'help-echo (format "View crate: %s" dname)
                                 'crate-url (concat crate--crates-io-url dname))
             (insert (make-string (max pad 1) ?\s) rest "\n"))))
+      ;; Reverse dependencies: who depends on this crate.
+      (when-let* ((dependents (crate--dependents crate-name)))
+        (insert "\nDependents:\n")
+        (dolist (dname dependents)
+          (insert-text-button dname
+                              'action (lambda (_) (find-crate dname))
+                              'follow-link t
+                              'face 'crate-url
+                              'help-echo (format "View crate: %s" dname)
+                              'crate-url (concat crate--crates-io-url dname))
+          (insert "\n")))
       ;; Module structure from rustdoc JSON.
       (when-let* ((doc-json (crate-doc--json crate-name)))
         (insert "Modules:\n")
