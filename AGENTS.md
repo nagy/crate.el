@@ -58,15 +58,23 @@ Files:
 1. **`nix/crate-doc.nix`** — companion Nix file. Uses a pinned crates.io-index
    to generate Cargo.lock offline (sandbox-safe), then crane + nightly
    rustc runs `cargo doc --output-format json`. Fully sandboxed.
-2. **`crate-doc--build`** — calls `nix-build` synchronously, returns
-   the Nix store output path.  Missing `nix-build` or a signaling
-   `call-process` returns nil (graceful degradation: no module tree,
-   `find-crate` unaffected) — pre-checked with `executable-find` and
-   guarded with `condition-case`.  `crate-doc--nix-path` looks for
+2. **`crate-doc--start-build`** — spawns `nix-build` ASYNCHRONOUSLY via
+   `make-process` (Emacs never blocks; cold builds take minutes).
+   Missing `nix-build`, missing `crate-doc.nix`, or a spawn failure
+   caches the `:failed` sentinel (graceful degradation: status line,
+   `find-crate` unaffected).  A second request for the same crate
+   reuses the in-flight build; the generation counter
+   (`crate-doc--generation`, bumped by `crate-refresh-cache`) makes
+   the sentinel discard stale results.  On completion the sentinel
+   re-renders the crate buffer via `crate-doc--json-from-build`,
+   which extracts the store path and parses the non-driver JSON.
+   `crate-doc--nix-path` looks for
    `crate-doc.nix` next to `crate.el` and then in `nix/` (the source
    tree keeps the file under `nix/`).
-3. **`crate-doc--json`** — parses the JSON, memoized with `:failed`
-   sentinel to avoid retrying failed builds.
+3. **`crate-doc--json`** — cache lookup only (path-keyed); starts an
+   async build on miss and returns nil (the buffer shows "build in
+   progress" and re-renders on completion).  `:failed` sentinel
+   avoids retrying failed builds.
 4. **`crate-doc--module-tree`** — pure function, parses JSON into nested
    `(NAME KIND (CHILDREN...) DOC)` tuples. `KIND` is a symbol (struct,
    trait, function, module, macro, enum, etc.).
@@ -99,8 +107,9 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `defconst`)
 3. Cache (hash-table vars, `with-memoization`, cache keys include
    `crate-data-path` for self-invalidation)
-4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--build`,
-   `crate-doc--json`, `crate-doc--module-tree`)
+4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--start-build`,
+   `crate-doc--json-from-build`, `crate-doc--json`,
+   `crate-doc--module-tree`)
 5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
    `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
@@ -298,17 +307,21 @@ returns nil, the computation re-runs every call.  For results
 where nil is a valid "don't recompute" outcome, use a sentinel:
 
 ```elisp
-;; Wrong — retries on nil (e.g. failed build)
-(with-memoization (gethash name cache)
-  (crate-doc--build name))
+;; Wrong — retries on nil (e.g. failed query)
+(with-memoization (gethash key cache)
+  (crate--deps name))
 
 ;; Correct — :failed caches the negative result
-(let ((cached (with-memoization (gethash name cache)
-                (or (crate-doc--build name)
+(let ((cached (with-memoization (gethash key cache)
+                (or (crate--deps name)
                     :failed))))
   (unless (eq cached :failed)
     cached))
 ```
+
+The async doc-build path (`crate-doc--json`) reads the cache
+directly instead — `with-memoization` fits synchronous computation
+only.
 
 ### Avoid `let-alist` on hash tables
 

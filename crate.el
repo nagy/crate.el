@@ -223,61 +223,115 @@ cannot be found."
               (list (expand-file-name "crate-doc.nix" dir)
                     (expand-file-name "nix/crate-doc.nix" dir)))))
 
-(defun crate-doc--build (name)
-  "Build rustdoc JSON for crate NAME via nix-build.
-Returns the Nix store output path on success, or nil on failure —
-including when `nix-build' is missing from `exec-path' (graceful
-degradation: no module tree, no error).  This call is synchronous
-— it blocks Emacs until the build completes."
-  (when-let* ((nix-path (crate-doc--nix-path))
-              ((executable-find "nix-build")))
-    (with-temp-buffer
-      ;; `call-process' can still signal (e.g. mid-call PATH
-      ;; changes); never let that escape — nil degrades to "no
-      ;; module tree".
-      (condition-case nil
-          (let ((exitcode (call-process "nix-build" nil (list t nil) nil
-                                        nix-path
-                                        "--argstr" "crateName" name)))
-            (when (eq 0 exitcode)
-              (goto-char (point-max))
-              (forward-line -1)
-              (let ((path (string-trim (buffer-substring (point) (point-max)))))
-                (when (and path (not (string-empty-p path)))
-                  path))))
-        (error nil)))))
+(defvar crate-doc--in-flight (make-hash-table :test #'equal)
+  "In-flight async doc builds keyed by crate name.
+A second request for the same crate reuses the running build.")
+
+(defvar crate-doc--generation 0
+  "Generation counter for async doc builds.
+Bumped by `crate-refresh-cache'; results from older generations
+are discarded.")
+
+(defun crate-doc--json-from-build (out)
+  "Parse the rustdoc JSON from nix-build output buffer OUT, or nil.
+Extracts the Nix store path from the last output line, then picks
+the crate's JSON (non-driver) under share/doc."
+  (with-current-buffer out
+    (goto-char (point-max))
+    (forward-line -1)
+    (let ((path (string-trim (buffer-substring (point) (point-max)))))
+      (when (and path (not (string-empty-p path)) (file-exists-p path))
+        (let ((doc-dir (expand-file-name "share/doc" path)))
+          (when (file-directory-p doc-dir)
+            (let ((json-file
+                   ;; Pick the crate's JSON (non-driver).
+                   (car (cl-remove-if
+                         (lambda (f)
+                           (or (string-match-p "/crate_doc_driver\\.json$" f)
+                               (not (string-suffix-p ".json" f))))
+                         (directory-files-recursively doc-dir "")))))
+              (when json-file
+                (with-temp-buffer
+                  (insert-file-contents json-file)
+                  (goto-char (point-min))
+                  (condition-case nil
+                      (json-parse-buffer)
+                    (error nil)))))))))))
+
+(defun crate-doc--start-build (name buffer)
+  "Start an async rustdoc build for crate NAME, re-rendering BUFFER.
+Returns non-nil when a build is running (started now or reused),
+nil when unavailable (missing `nix-build', missing crate-doc.nix,
+or a spawn failure) — in which case the `:failed' sentinel caches
+the negative (graceful degradation: no module tree, no error).
+The process sentinel stores the parsed JSON and re-renders BUFFER;
+results from stale generations (after `crate-refresh-cache') are
+discarded."
+  (cond
+   ;; Reuse the running build instead of spawning a second one.
+   ((gethash name crate-doc--in-flight) t)
+   ((when-let* ((nix-path (crate-doc--nix-path))
+                ((executable-find "nix-build")))
+      (let ((gen crate-doc--generation)
+            (path crate-data-path)
+            (out (generate-new-buffer " *crate-doc-build*")))
+        (condition-case nil
+            (progn
+              (make-process
+               :name (format "crate-doc-build-%s" name)
+               :buffer out
+               :command (list "nix-build" nix-path
+                              "--argstr" "crateName" name)
+               :noquery t
+               :sentinel
+               (lambda (proc _event)
+                 (when (memq (process-status proc) '(exit signal))
+                   (unwind-protect
+                       (let ((json (and (eq 0 (process-exit-status proc))
+                                        (crate-doc--json-from-build out))))
+                         (remhash name crate-doc--in-flight)
+                         ;; Discard stale results (e.g. cache refresh
+                         ;; mid-build) — the generation moved on.
+                         (when (= gen crate-doc--generation)
+                           (puthash (list name path) (or json :failed)
+                                    crate-doc--cache)
+                           (when (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (crate--render)))
+                           (unless json
+                             (message "crate: rustdoc build failed for %s"
+                                      name))))
+                     (when (buffer-live-p out)
+                       (kill-buffer out))))))
+              (puthash name t crate-doc--in-flight)
+              t)
+          (error
+           ;; Spawn failure: degrade like missing Nix.
+           (when (buffer-live-p out)
+             (kill-buffer out))
+           (puthash (list name path) :failed crate-doc--cache)
+           nil)))))
+   (t
+    ;; Missing nix-build or crate-doc.nix: cache the negative so
+    ;; renders don't re-probe; `crate-refresh-cache' clears it.
+    (puthash (list name crate-data-path) :failed crate-doc--cache)
+    nil)))
 
 (defun crate-doc--json (name)
   "Return the parsed rustdoc JSON for crate NAME, or nil.
-Builds the JSON on-demand via `crate-doc--build' and caches the
-result.  Returns nil if docs cannot be built, the crate has no
-JSON output, or a prior build attempt already failed."
+First use starts an ASYNC build (see `crate-doc--start-build') and
+returns nil; the crate buffer re-renders with the module tree when
+the build completes.  Also nil while building, when docs cannot be
+built, or after a prior build failed (cached `:failed' sentinel)."
   (when-let* ((table (and crate-doc-enable (crate--list))))
     (when (gethash name table)
-      (let ((cached (with-memoization
-                      (gethash (list name crate-data-path) crate-doc--cache)
-                    ;; Return :failed sentinel so with-memoization
-                    ;; doesn't retry builds that already failed.
-                    (or (when-let* ((store-path (crate-doc--build name)))
-                          (let ((doc-dir (expand-file-name "share/doc" store-path)))
-                            (when (file-directory-p doc-dir)
-                              (let ((json-file
-                                     ;; Pick the crate's JSON (non-driver).
-                                     (car (cl-remove-if
-                                           (lambda (f)
-                                             (or (string-match-p "/crate_doc_driver\\.json$" f)
-                                                 (not (string-suffix-p ".json" f))))
-                                           (directory-files-recursively doc-dir "")))))
-                                (when json-file
-                                  (with-temp-buffer
-                                    (insert-file-contents json-file)
-                                    (goto-char (point-min))
-                                    (condition-case nil
-                                        (json-parse-buffer)
-                                      (error nil))))))))
-                        :failed))))
-      (unless (eq cached :failed)
-        cached)))))
+      (let ((cached (gethash (list name crate-data-path) crate-doc--cache)))
+        (cond
+         ((eq cached :failed) nil)
+         (cached cached)
+         (t
+          (crate-doc--start-build name (current-buffer))
+          nil))))))
 
 (defun crate-doc--module-tree (json)
   "Return the module tree from rustdoc JSON.
@@ -643,10 +697,16 @@ bracketed tag before the name."
                               'help-echo (format "View crate: %s" dname)
                               'crate-url (concat crate--crates-io-url dname))
           (insert "\n")))
-      ;; Module structure from rustdoc JSON.
-      (when-let* ((doc-json (crate-doc--json crate-name)))
-        (insert "Modules:\n")
-        (insert-doc-tree (crate-doc--module-tree doc-json) 0))
+      ;; Module structure from rustdoc JSON (built async on demand).
+      (let ((doc-json (crate-doc--json crate-name)))
+        (cond
+         (doc-json
+          (insert "Modules:\n")
+          (insert-doc-tree (crate-doc--module-tree doc-json) 0))
+         ((gethash (list crate-name crate-data-path) crate-doc--cache)
+          (insert "Modules: (rustdoc unavailable)\n"))
+         ((and crate-doc-enable (gethash crate-name crate-doc--in-flight))
+          (insert "Modules: (rustdoc build in progress…)\n"))))
       ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
       (save-excursion
         (goto-char (point-min))
@@ -720,7 +780,10 @@ The next `find-crate' or completion invocation will reload from
 the database."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
-        crate-doc--cache (make-hash-table :test 'equal))
+        crate-doc--cache (make-hash-table :test 'equal)
+        crate-doc--in-flight (make-hash-table :test 'equal))
+  ;; Discard results of builds started before the refresh.
+  (cl-incf crate-doc--generation)
   (message "crate: cache cleared"))
 
 
