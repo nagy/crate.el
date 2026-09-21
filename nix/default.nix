@@ -29,10 +29,10 @@ melpaBuild {
 
   checkPhase = ''
     runHook preCheck
-    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-      -f batch-byte-compile crate.el
-    emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-      -f batch-byte-compile crate-tests.el
+    for f in crate.el ol-crate.el crate-tests.el; do
+      emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+        -f batch-byte-compile "$f"
+    done
     emacs --batch -L . \
       -l crate-tests.el \
       -f ert-run-tests-batch-and-exit

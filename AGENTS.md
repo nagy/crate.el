@@ -27,7 +27,8 @@ come from `nix/emacs-screenshot.nix`, which uses
 vendored).
 
 Byte-compile with warnings as errors (wired into the Nix
-build's checkPhase):
+build's checkPhase for all elisp files — crate.el, ol-crate.el,
+crate-tests.el):
 
 ```sh
 emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
