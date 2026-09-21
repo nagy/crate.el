@@ -857,6 +857,105 @@ Substituted at build time by default.nix.")
     (should (equal (car kill-ring) "foo = \"*\""))))
 
 
+;;; Gap-closing tests
+
+(ert-deftest crate-mode-renders-dependency-buttons ()
+  "Dependency rows render with name, req, kind, and optional marker."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1.0" "normal" 0)
+                                 ("tokio" "^1" "dev" 1)))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (let ((content (buffer-string)))
+            (should (string-match-p "Dependencies:" content))
+            (should (string-match-p "serde" content))
+            (should (string-match-p "\\^1\\.0" content))
+            (should (string-match-p "dev" content))
+            (should (string-match-p "(optional)" content))))))))
+
+(ert-deftest crate-browse-refresh-picks-up-new-data ()
+  "`crate-browse-refresh' re-derives entries from the live cache."
+  (let ((table (crate-test--crate-table '("htop" :name "htop" :description "viewer"))))
+    (cl-letf (((symbol-function 'crate--list) (lambda () table)))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (crate-browse-refresh)
+        (should (assoc "htop" tabulated-list-entries))
+        ;; Cache swapped (e.g. new database) — refresh must pick it up.
+        (setq table (crate-test--crate-table
+                     '("neovim" :name "neovim" :description "editor")))
+        (crate-browse-refresh)
+        (should (assoc "neovim" tabulated-list-entries))
+        (should-not (assoc "htop" tabulated-list-entries))))))
+
+(ert-deftest crate-browse-search-url-opens-crates-io ()
+  "`crate-browse-search-url' opens the entry on crates.io."
+  (let ((opened nil))
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (url &rest _) (setq opened url))))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (setq tabulated-list-entries
+              (list (list "htop" ["htop" "3.0" "viewer"])))
+        (tabulated-list-print)
+        (goto-char (point-min))
+        (crate-browse-search-url))
+      (should (equal opened (concat crate--crates-io-url "htop"))))))
+
+(ert-deftest crate--filter-by-name-substring ()
+  "`crate--filter-by-name' matches substrings of published names."
+  (cl-letf (((symbol-function 'crate--list)
+             (lambda () (crate-test--crate-table
+                         '("async-trait" :name "async-trait" :description "macros")
+                         '("tokio" :name "tokio" :description "runtime")))))
+    ;; Mid-string hit — not prefix matching.
+    (should (equal (crate--filter-by-name "sync") '("async-trait")))
+    (should (equal (crate--filter-by-name "tok") '("tokio")))))
+
+(ert-deftest crate-bookmark-roundtrip ()
+  "Crate bookmark round-trips: make-record then handler jump."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname)))))
+            (find-crate "serde")
+            (let* ((buf (get-buffer "Crate: serde"))
+                   (rec (with-current-buffer buf
+                          (crate--bookmark-make-record-function))))
+              (funcall (bookmark-prop-get rec 'handler) rec)
+              (should (equal (buffer-name) "Crate: serde"))
+              (kill-buffer buf))))
+      (delete-file tmpfile))))
+
+(ert-deftest crate-browse-bookmark-roundtrip ()
+  "Browse bookmark round-trips: make-record then handler jump."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer)
+              ((symbol-function 'crate--list)
+               (lambda () (crate-test--crate-table
+                           '("serde" :name "serde" :description "serialization")
+                           '("serde_derive" :name "serde_derive" :description "macros")
+                           '("tokio" :name "tokio" :description "runtime")))))
+      (let ((buf (crate-browse-crates nil "serde")))
+        (let ((rec (with-current-buffer buf
+                     (crate-browse--bookmark-make-record))))
+          (funcall (bookmark-prop-get rec 'handler) rec)
+          ;; Re-derived filter keeps only matching crates.
+          (should (assoc "serde" tabulated-list-entries))
+          (should (assoc "serde_derive" tabulated-list-entries))
+          (should-not (assoc "tokio" tabulated-list-entries)))
+        (kill-buffer buf)))))
+
+
 ;;; Canonical names
 
 (ert-deftest crate-find-crate-hyphenated-name ()
