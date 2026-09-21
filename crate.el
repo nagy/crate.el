@@ -147,14 +147,18 @@ a corrupt or missing file on every subsequent call."
            (if (and crate-data-path (file-exists-p crate-data-path))
                (condition-case nil
                    (let* ((db (sqlite-open crate-data-path))
+                          ;; `unwind-protect', never `prog1': a failed
+                          ;; query must not leak the handle.
                           (rows
-                           (sqlite-select
-                            db
-                            "SELECT name, display_name, description,
+                           (unwind-protect
+                               (sqlite-select
+                                db
+                                "SELECT name, display_name, description,
                                     documentation, homepage, repository,
                                     created_at, updated_at,
                                     latest_version, license, downloads
-                             FROM crates"))
+                             FROM crates")
+                             (sqlite-close db)))
                           (table (make-hash-table :test #'equal)))
                      (dolist (row rows)
                        (let ((entry (make-hash-table :test #'equal)))
@@ -177,7 +181,6 @@ a corrupt or missing file on every subsequent call."
                            (puthash "license" (nth 9 row) entry))
                          (puthash "downloads" (or (nth 10 row) 0) entry)
                          (puthash (nth 0 row) entry table)))
-                     (sqlite-close db)
                      table)
                  (error :failed))
              :failed))))
@@ -351,7 +354,9 @@ retrying failed queries, and nil results (no rows) are cached."
                     ;; doesn't retry failed queries on every call.
                     (condition-case nil
                         (let ((db (sqlite-open crate-data-path)))
-                          (prog1
+                          ;; `unwind-protect', never `prog1': a failed
+                          ;; query must not leak the handle.
+                          (unwind-protect
                               (sqlite-select db
                                              "SELECT dep_name, req, kind, optional
                                   FROM dependencies WHERE crate_name = ?

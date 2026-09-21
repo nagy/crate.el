@@ -188,6 +188,9 @@ configuration first ("No crate database configured" / "unreadable")
 before any name lookup, so a missing DB never masquerades as a
 missing crate.
 
+SQLite handles close via `unwind-protect`, never `prog1` — a query
+error must not leak the handle.
+
 ```elisp
 (condition-case nil
     (let ((raw (with-temp-buffer

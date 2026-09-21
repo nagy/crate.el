@@ -304,6 +304,34 @@ record, not the top-level crate table)."
 
 ;;; Bookmarks
 
+(ert-deftest crate--list-closes-db-on-error ()
+  "A failing query still closes the SQLite handle in `crate--list'."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/tmp/exists.db")
+        (closed 0))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (&rest _) (error "query failed")))
+              ((symbol-function 'sqlite-close)
+               (lambda (&rest _) (cl-incf closed))))
+      (should-not (crate--list))
+      (should (= closed 1)))))
+
+(ert-deftest crate--deps-closes-db-on-error ()
+  "A failing query still closes the SQLite handle in `crate--deps'."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/tmp/exists.db")
+        (closed 0))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (&rest _) (error "query failed")))
+              ((symbol-function 'sqlite-close)
+               (lambda (&rest _) (cl-incf closed))))
+      (should-not (crate--deps "serde"))
+      (should (= closed 1)))))
+
 (ert-deftest crate-bookmark-make-record ()
   "`crate--bookmark-make-record-function' returns a bookmark record."
   (crate-test--with-crate "test-crate"
