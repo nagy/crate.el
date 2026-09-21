@@ -128,7 +128,11 @@ is nil. Callers must use `(cadddr item)` to get docs:
     `crate-mode-map`, `crate-browse-mode-map`, and
     `crate-embark-map`; copies `NAME = "VERSION"` for
     `Cargo.toml`)
-15. Embark (action keymap `crate-embark-map`, export function,
+15. Cargo.toml Integration (`crate-cargo-completion-at-point`,
+    `crate-install-cargo-toml-capf`, `crate-cargo-toml-modes` —
+    crate-name completion in `[dependencies]` family sections,
+    soft TOML-mode dep via the modes list)
+16. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions
@@ -436,8 +440,5 @@ against it in the `when-let*` binding, not in the body:
 
 ## TODO
 
-- **Completion-at-point for `Cargo.toml`** — provide crate name
-  completion in `[dependencies]` sections of `Cargo.toml` buffers.
-  Hook into `completion-at-point-functions` with a custom function
-  that queries `crate--keys` for matching crate names.  Would make
-  crate.el a genuine Rust developer tool.
+None right now.  The former Cargo.toml completion-at-point TODO
+shipped as section 15.

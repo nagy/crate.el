@@ -34,6 +34,7 @@
 ;;
 ;;   M-x find-crate  -- look up a Rust crate by name
 ;;   M-x crate-copy-dependency -- copy a Cargo.toml dependency line
+;;   M-x crate-install-cargo-toml-capf -- crate names in Cargo.toml
 ;;
 ;; Deep integration:
 ;;
@@ -999,6 +1000,49 @@ Embark passes its candidate directly."
                          "*"))))
     (kill-new line)
     (message "Copied: %s" line)))
+
+
+;;; Cargo.toml Integration
+
+(defcustom crate-cargo-toml-modes '(toml-mode toml-ts-mode)
+  "Major modes treated as `Cargo.toml' for crate-name completion.
+The modes themselves stay external — crate.el never hard-requires
+a TOML mode; this list is how `crate-cargo-completion-at-point'
+recognizes compatible buffers."
+  :type '(repeat symbol)
+  :group 'crate)
+
+(defun crate--cargo-in-dependencies-p ()
+  "Return non-nil if point is inside a dependency section.
+Recognizes the flat `[dependencies]', `[dev-dependencies]', and
+`[build-dependencies]' headers.  Dotted `[dependencies.foo]`
+tables are excluded — the crate name is already written there."
+  (save-excursion
+    (when (re-search-backward "^\\[\\([^]]+\\)\\][[:space:]]*$" nil t)
+      (member (match-string 1)
+              '("dependencies" "dev-dependencies" "build-dependencies")))))
+
+(defun crate-cargo-completion-at-point ()
+  "Complete a crate name at point inside Cargo.toml dependency sections.
+Intended for `completion-at-point-functions' in the modes of
+`crate-cargo-toml-modes' (see `crate-install-cargo-toml-capf')."
+  (when (and (memq major-mode crate-cargo-toml-modes)
+             (crate--cargo-in-dependencies-p))
+    (let ((end (point)) start)
+      (save-excursion
+        (skip-chars-backward "a-zA-Z0-9_.-")
+        (setq start (point)))
+      (when (< start end)
+        (list start end #'crate--collection)))))
+
+;;;###autoload
+(defun crate-install-cargo-toml-capf ()
+  "Enable crate-name completion in `Cargo.toml' dependency sections.
+Registers `crate-cargo-completion-at-point' globally; the function
+itself stays silent outside TOML modes and dependency sections."
+  (interactive)
+  (add-hook 'completion-at-point-functions
+            #'crate-cargo-completion-at-point))
 
 
 ;;; Embark

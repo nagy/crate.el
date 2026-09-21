@@ -825,6 +825,45 @@ Substituted at build time by default.nix.")
     (should (equal (car kill-ring) "foo = \"*\""))))
 
 
+;;; Cargo.toml completion
+
+(ert-deftest crate-cargo-capf-in-dependencies ()
+  "CAPF bounds and collection work inside [dependencies]."
+  (cl-letf (((symbol-function 'crate--match-names)
+             (lambda (prefix) (list (concat prefix "-trait")))))
+    (with-temp-buffer
+      ;; `toml-mode' is external; fake the major mode.
+      (setq-local major-mode 'toml-mode)
+      (insert "[package]\nname = \"x\"\n\n[dependencies]\nser")
+      (let ((capf (crate-cargo-completion-at-point)))
+        (should capf)
+        (pcase-let ((`(,start ,end ,table) capf))
+          (should (equal (buffer-substring start end) "ser"))
+          (should (member "ser-trait" (all-completions "ser" table))))))))
+
+(ert-deftest crate-cargo-capf-silent-outside-dependencies ()
+  "CAPF stays silent outside dependency sections and TOML modes."
+  (with-temp-buffer
+    (setq-local major-mode 'toml-mode)
+    ;; [package] section.
+    (insert "[package]\nna")
+    (should-not (crate-cargo-completion-at-point))
+    ;; [features] section.
+    (erase-buffer)
+    (insert "[features]\ndefault = []")
+    (should-not (crate-cargo-completion-at-point))
+    ;; Dotted sub-table: name already written.
+    (erase-buffer)
+    (insert "[dependencies.serde]\nversion = \"1\"")
+    (goto-char (point-max))
+    (should-not (crate-cargo-completion-at-point))
+    ;; Non-TOML mode.
+    (erase-buffer)
+    (setq-local major-mode 'fundamental-mode)
+    (insert "[dependencies]\nser")
+    (should-not (crate-cargo-completion-at-point))))
+
+
 ;;; Gap-closing tests
 
 (ert-deftest crate-mode-renders-dependency-buttons ()
