@@ -230,9 +230,8 @@ record, not the top-level crate table)."
 
 (ert-deftest crate-data-path-setq-self-invalidates ()
   "Plain `setq' of `crate-data-path' serves fresh data without refresh.
-Covers `crate--list' and `crate--keys' across nil -> db1 -> db2 switches."
+Covers `crate--list' across nil -> db1 -> db2 switches."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache (make-hash-table :test 'equal))
         (crate-doc--cache (make-hash-table :test 'equal))
         (db1 (crate-test--sqlite-db
               '("serde" :name "serde" :latest_version "1.0.0")))
@@ -245,13 +244,10 @@ Covers `crate--list' and `crate--keys' across nil -> db1 -> db2 switches."
           ;; ...then plain setq must serve db1 fresh — no refresh call.
           (setq crate-data-path db1)
           (should (gethash "serde" (crate--list)))
-          (should (member "serde" (crate--keys)))
           ;; Second switch: db2 data, no db1 leftovers.
           (setq crate-data-path db2)
           (should (gethash "tokio" (crate--list)))
-          (should-not (gethash "serde" (crate--list)))
-          (should (member "tokio" (crate--keys)))
-          (should-not (member "serde" (crate--keys))))
+          (should-not (gethash "serde" (crate--list))))
       (delete-file db1)
       (delete-file db2))))
 
@@ -299,33 +295,6 @@ Covers `crate--list' and `crate--keys' across nil -> db1 -> db2 switches."
             (should (string-match-p "tokio" content))
             (should (string-match-p "axum" content))))))))
 
-
-(ert-deftest crate--keys-caches-empty-db ()
-  "`crate--keys' caches a nil result so an empty database isn't re-scanned."
-  (let ((crate--keys-cache (make-hash-table :test 'equal)))
-    (cl-letf (((symbol-function 'crate--list)
-               (lambda () (make-hash-table :test 'equal))))  ; empty table
-      (should-not (crate--keys))
-      (should (gethash (list 'keys crate-data-path) crate--keys-cache))
-      ;; Second call must not re-run crate--list (cache holds the sentinel).
-      (let ((calls 0))
-        (cl-letf (((symbol-function 'crate--list)
-                   (lambda () (cl-incf calls) (make-hash-table :test 'equal))))
-          (should-not (crate--keys))
-          (should (= calls 0)))))))
-
-(ert-deftest crate--keys-caches-failed-load ()
-  "`crate--keys' caches a failed `crate--list' so it isn't retried per call."
-  (let ((crate--keys-cache (make-hash-table :test 'equal)))
-    (cl-letf (((symbol-function 'crate--list) (lambda () nil)))
-      (should-not (crate--keys))
-      (should (gethash (list 'keys crate-data-path) crate--keys-cache))
-      ;; Second call must not re-run crate--list.
-      (let ((calls 0))
-        (cl-letf (((symbol-function 'crate--list)
-                   (lambda () (cl-incf calls) nil)))
-          (should-not (crate--keys))
-          (should (= calls 0)))))))
 
 (ert-deftest crate--deps-memoized ()
   "`crate--deps' caches both empty and failed results."
@@ -806,7 +775,6 @@ Substituted at build time by default.nix.")
   "End-to-end: `crate-browse-crates' displays a table with test data."
   (skip-unless (crate-test--data-ready-p))
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache (make-hash-table :test 'equal))
         (crate-data-path crate-test--data-file))
     (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer))
       (let ((buf (crate-browse-crates)))
@@ -956,13 +924,58 @@ Substituted at build time by default.nix.")
         (kill-buffer buf)))))
 
 
+;;; SQL-backed completion
+
+(ert-deftest crate--sql-like-escape ()
+  "LIKE wildcards in input match literally."
+  (should (equal (crate--sql-like-escape "serde_") "serde\\_"))
+  (should (equal (crate--sql-like-escape "100%") "100\\%"))
+  (should (equal (crate--sql-like-escape "a\\b") "a\\\\b")))
+
+(ert-deftest crate--match-names-prefix-query ()
+  "`crate--match-names' queries per call with escaped prefix patterns."
+  (let ((captured nil))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (_db _sql params)
+                 (setq captured (car params))
+                 '(("tokio") ("tokio-macros"))))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (let ((crate-data-path "/db1.db"))
+        (should (equal (crate--match-names "tok") '("tokio" "tokio-macros")))
+        ;; Underscore input escaped — never a LIKE wildcard.
+        (crate--match-names "tokio_")
+        (should (equal captured "tokio\\_%"))))))
+
+(ert-deftest crate-completion-collection-matches-prefix ()
+  "The collection offers names matching the typed prefix under any style."
+  (cl-letf (((symbol-function 'crate--match-names)
+             (lambda (prefix)
+               (delq nil
+                     (mapcar (lambda (n) (when (string-prefix-p prefix n) n))
+                             '("async-trait" "tokio"))))))
+    (cl-flet ((names (style string)
+                (let* ((completion-styles (list style))
+                       (res (completion-all-completions
+                             string #'crate--collection nil (length string)))
+                       acc)
+                  (while (consp res)
+                    (push (substring-no-properties (car res)) acc)
+                    (setq res (cdr res)))
+                  acc)))
+      ;; basic/partial-completion filter by prefix...
+      (should (equal (names 'basic "tok") '("tokio")))
+      ;; ...substring/flex query wider and filter themselves.
+      (should (member "tokio" (names 'substring "ok"))))))
+
+
 ;;; Canonical names
 
 (ert-deftest crate-find-crate-hyphenated-name ()
   "Hyphenated crate names resolve via canonical keys.
 Published name, canonical form, and versioned URL all open the crate."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache (make-hash-table :test 'equal))
         (crate-doc--cache (make-hash-table :test 'equal))
         (crate-doc-enable nil)
         (tmpfile (crate-test--sqlite-db
@@ -987,13 +1000,12 @@ Published name, canonical form, and versioned URL all open the crate."
 (ert-deftest crate-completion-offers-published-names ()
   "Completion offers published (hyphenated) names; annotate resolves them."
   (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate--keys-cache (make-hash-table :test 'equal))
         (tmpfile (crate-test--sqlite-db
                   '("async-trait" :name "async-trait" :description "derive macros"))))
     (unwind-protect
         (let ((crate-data-path tmpfile))
-          (should (member "async-trait" (crate--keys)))
-          (should-not (member "async_trait" (crate--keys)))
+          (should (member "async-trait" (crate--match-names "async")))
+          (should-not (member "async_trait" (crate--match-names "async")))
           (should (string-match-p "derive macros"
                                   (or (crate--annotate "async-trait") ""))))
       (delete-file tmpfile))))

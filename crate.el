@@ -659,28 +659,35 @@ bracketed tag before the name."
 
 ;;; Completion
 
-(defvar crate--keys-cache (make-hash-table :test #'equal)
-  "Cached list of lowercase crate names for completion.
-Memoized with a :failed sentinel keyed by database path; cleared
-by `crate-refresh-cache'.")
+(defun crate--sql-like-escape (s)
+  "Escape LIKE wildcards in S for use with ESCAPE '\\'.
+Underscore and percent are valid crate-name characters, so they
+must match literally."
+  (declare (pure t) (side-effect-free t))
+  (setq s (string-replace "\\" "\\\\" s))
+  (setq s (string-replace "%" "\\%" s))
+  (string-replace "_" "\\_" s))
 
-(defun crate--keys ()
-  "Return the list of all crate names for completion.
-Loads from `crate-data-path' if needed and caches the result.
-An empty database yields nil (cached, not re-scanned per call)
-and a failed load stays failed until `crate-refresh-cache'."
-  (let ((cached (with-memoization
-                  (gethash (list 'keys crate-data-path) crate--keys-cache)
-                  ;; Return :failed sentinel so with-memoization
-                  ;; doesn't recompute on nil (empty database).
-                  (let* ((data (crate--list))
-                         (names (when data
-                                  (mapcar (lambda (entry) (gethash "name" entry))
-                                          (hash-table-values data)))))
-                    ;; Published names — what users type and see.
-                    (or names :failed)))))
-    (unless (eq cached :failed)
-      cached)))
+(defun crate--match-names (prefix)
+  "Return published crate names starting with PREFIX.
+Queries SQLite per call — no full name list materializes, so
+completion scales to a full crates.io dump.  The prefix pattern
+matches the collection contract (`complete-with-action'
+prefix-filters each query); completion styles query with their own
+strings and filter further on top.  Wildcards in PREFIX are
+escaped via `crate--sql-like-escape'."
+  (when (and crate-data-path (file-exists-p crate-data-path))
+    (condition-case nil
+        (let ((db (sqlite-open crate-data-path)))
+          (unwind-protect
+              (mapcar #'car
+                      (sqlite-select
+                       db
+                       "SELECT name FROM crates WHERE name LIKE ? ESCAPE '\\'
+                        ORDER BY name"
+                       (list (concat (crate--sql-like-escape prefix) "%"))))
+            (sqlite-close db)))
+      (error nil))))
 
 (defun crate--annotate (candidate)
   "Completion annotation function for crate CANDIDATE."
@@ -704,7 +711,7 @@ ACTION."
        (category . crate)
        (annotation-function . crate--annotate)))
     (_
-     (complete-with-action action (crate--keys) string predicate))))
+     (complete-with-action action (crate--match-names string) string predicate))))
 
 (defun crate-refresh-cache ()
   "Discard cached crate data.
@@ -712,7 +719,6 @@ The next `find-crate' or completion invocation will reload from
 the database."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
-        crate--keys-cache (make-hash-table :test 'equal)
         crate-doc--cache (make-hash-table :test 'equal))
   (message "crate: cache cleared"))
 

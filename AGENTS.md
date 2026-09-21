@@ -109,7 +109,7 @@ is nil. Callers must use `(cadddr item)` to get docs:
    `setq-local` for font-lock defaults, bookmark record function, and
    `revert-buffer-function`; content is inserted by `crate--render`,
    which uses the `crate-name` / `crate-data` buffer-locals)
-8. Completion (`crate--keys`, `crate--annotate`,
+8. Completion (`crate--match-names`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
 9. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
@@ -265,9 +265,13 @@ never the hash key.  `"display_name"` holds the pretty form.
 The completion collection function (`crate--collection`) returns
 `(metadata (category . crate) (annotation-function . ...))` for
 the `metadata` action.  This gives Marginalia and Embark a
-category to hook into.  Crate names are cached in
-`crate--keys-cache` to avoid rebuilding the list from the cache
-hash on every keystroke.
+category to hook into.  Candidate names come from per-keystroke
+SQL prefix queries (`crate--match-names`) — no full name list
+materializes, so completion scales to a full crates.io dump.
+LIKE wildcards in user input are escaped (`crate--sql-like-escape`)
+since `_` is a valid crate-name character; the prefix pattern
+matches the `complete-with-action' contract, and completion styles
+query with their own strings and filter further on top.
 
 ### Memoization
 
