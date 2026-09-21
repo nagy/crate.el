@@ -217,20 +217,27 @@ cannot be found."
 
 (defun crate-doc--build (name)
   "Build rustdoc JSON for crate NAME via nix-build.
-Returns the Nix store output path on success, or nil on failure.
-This call is synchronous — it blocks Emacs until the build
-completes."
-  (when-let* ((nix-path (crate-doc--nix-path)))
+Returns the Nix store output path on success, or nil on failure —
+including when `nix-build' is missing from `exec-path' (graceful
+degradation: no module tree, no error).  This call is synchronous
+— it blocks Emacs until the build completes."
+  (when-let* ((nix-path (crate-doc--nix-path))
+              ((executable-find "nix-build")))
     (with-temp-buffer
-      (let ((exitcode (call-process "nix-build" nil (list t nil) nil
-                                    nix-path
-                                    "--argstr" "crateName" name)))
-        (when (eq 0 exitcode)
-          (goto-char (point-max))
-          (forward-line -1)
-          (let ((path (string-trim (buffer-substring (point) (point-max)))))
-            (when (and path (not (string-empty-p path)))
-              path)))))))
+      ;; `call-process' can still signal (e.g. mid-call PATH
+      ;; changes); never let that escape — nil degrades to "no
+      ;; module tree".
+      (condition-case nil
+          (let ((exitcode (call-process "nix-build" nil (list t nil) nil
+                                        nix-path
+                                        "--argstr" "crateName" name)))
+            (when (eq 0 exitcode)
+              (goto-char (point-max))
+              (forward-line -1)
+              (let ((path (string-trim (buffer-substring (point) (point-max)))))
+                (when (and path (not (string-empty-p path)))
+                  path))))
+        (error nil)))))
 
 (defun crate-doc--json (name)
   "Return the parsed rustdoc JSON for crate NAME, or nil.

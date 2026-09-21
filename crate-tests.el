@@ -695,6 +695,62 @@ Substituted at build time by default.nix.")
 
 ;;; Doc build
 
+(ert-deftest crate-doc-build-missing-nix ()
+  "Without `nix-build', `crate-doc--build' returns nil without calling it."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'crate-doc--nix-path)
+               (lambda () "/fake/crate-doc.nix"))
+              ((symbol-function 'executable-find) (lambda (_) nil))
+              ((symbol-function 'call-process)
+               (lambda (&rest _) (cl-incf calls) 0)))
+      (should-not (crate-doc--build "serde"))
+      (should (= calls 0)))))
+
+(ert-deftest crate-doc-build-call-process-error ()
+  "When `call-process' signals, `crate-doc--build' returns nil."
+  (cl-letf (((symbol-function 'crate-doc--nix-path)
+             (lambda () "/fake/crate-doc.nix"))
+            ((symbol-function 'executable-find) (lambda (_) "/usr/bin/nix-build"))
+            ((symbol-function 'call-process)
+             (lambda (&rest _)
+               (signal 'file-error '("Searching for program" "nix-build")))))
+    (should-not (crate-doc--build "serde"))))
+
+(ert-deftest crate-find-crate-degrades-without-nix ()
+  "Missing `nix-build' degrades to no module tree, not a broken `find-crate'.
+The negative result is cached as `:failed' so the build isn't retried."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc--cache (make-hash-table :test 'equal))
+        (crate-doc-enable t)
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname))))
+                    ((symbol-function 'executable-find) (lambda (_) nil))
+                    ((symbol-function 'call-process)
+                     (lambda (&rest _)
+                       (signal 'file-error
+                               '("Searching for program" "nix-build")))))
+            (find-crate "serde")
+            (let ((buf (get-buffer "Crate: serde")))
+              (should buf)
+              (with-current-buffer buf
+                (let ((content (buffer-string)))
+                  (should (string-match-p "Name:.*serde" content))
+                  (should-not (string-match-p "Modules:" content))))
+              (should (eq (gethash "serde" crate-doc--cache) :failed))
+              ;; Cached negative: second visit must not re-attempt the build.
+              (let ((calls 0))
+                (cl-letf (((symbol-function 'call-process)
+                           (lambda (&rest _) (cl-incf calls) 0)))
+                  (find-crate "serde")
+                  (should (= calls 0))))
+              (kill-buffer buf))))
+      (delete-file tmpfile))))
+
 (ert-deftest crate-doc-module-tree-flat ()
   "`crate-doc--module-tree' on a flat module (no children)."
   (let* ((json (json-parse-string

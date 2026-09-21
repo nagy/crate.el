@@ -59,7 +59,10 @@ Files:
    to generate Cargo.lock offline (sandbox-safe), then crane + nightly
    rustc runs `cargo doc --output-format json`. Fully sandboxed.
 2. **`crate-doc--build`** — calls `nix-build` synchronously, returns
-   the Nix store output path.  `crate-doc--nix-path` looks for
+   the Nix store output path.  Missing `nix-build` or a signaling
+   `call-process` returns nil (graceful degradation: no module tree,
+   `find-crate` unaffected) — pre-checked with `executable-find` and
+   guarded with `condition-case`.  `crate-doc--nix-path` looks for
    `crate-doc.nix` next to `crate.el` and then in `nix/` (the source
    tree keeps the file under `nix/`).
 3. **`crate-doc--json`** — parses the JSON, memoized with `:failed`
