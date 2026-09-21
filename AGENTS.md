@@ -183,7 +183,10 @@ locals must carry `(put 'var 'permanent-local t)` to survive:
 `condition-case` so decompression failures, parse errors, and
 missing files all silently return nil.  Callers (`find-crate`,
 `crate--keys`) check for nil and either signal a `user-error` or
-return an empty completion list.
+return an empty completion list.  `find-crate` blames the
+configuration first ("No crate database configured" / "unreadable")
+before any name lookup, so a missing DB never masquerades as a
+missing crate.
 
 ```elisp
 (condition-case nil

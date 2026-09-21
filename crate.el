@@ -672,6 +672,11 @@ or switches to an existing one."
     (setq cand (crate--canonical-name cand))
     (let* ((data (crate--list))
            (entry (when data (gethash cand data))))
+      ;; No database at all: blame the configuration, not the name.
+      (unless data
+        (if crate-data-path
+            (user-error "Crate database `%s' unreadable" crate-data-path)
+          (user-error "No crate database configured — set `crate-data-path'")))
       (unless entry
         (user-error "Crate `%s' not found" cand))
       (let ((bufname (format "Crate: %s" cand)))

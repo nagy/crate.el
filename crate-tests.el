@@ -334,6 +334,28 @@ record, not the top-level crate table)."
     (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
       (should-error (find-crate "nonexistent") :type 'user-error))))
 
+(ert-deftest crate-find-crate-no-db-error ()
+  "Missing `crate-data-path' blames the configuration, not the crate name."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path nil))
+    (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
+      (let ((err (should-error (find-crate "serde") :type 'user-error)))
+        (should (string-match-p "No crate database configured" (cadr err)))
+        (should-not (string-match-p "not found" (cadr err)))))))
+
+(ert-deftest crate-find-crate-unreadable-db-error ()
+  "An unreadable database reports the path, not `not found'."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (tmpfile (make-temp-file "crate-test-" nil ".db")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmpfile (insert "not a database"))
+          (let ((crate-data-path tmpfile))
+            (cl-letf (((symbol-function 'switch-to-buffer) #'ignore))
+              (let ((err (should-error (find-crate "serde") :type 'user-error)))
+                (should (string-match-p "unreadable" (cadr err)))))))
+      (delete-file tmpfile))))
+
 (ert-deftest crate-find-crate-twice ()
   "`find-crate' on an existing buffer re-renders without error or duplication."
   (let ((crate--data-cache (make-hash-table :test 'equal))
