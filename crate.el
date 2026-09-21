@@ -78,15 +78,11 @@
 
 The database should contain a `crates' table with columns:
 name, display_name, description, documentation, homepage,
-repository, created_at, updated_at."
+repository, created_at, updated_at.
+
+All caches key on this path, so changing it — even via plain
+`setq' — serves fresh data with no `crate-refresh-cache' call."
   :type 'file
-  :set (lambda (sym value)
-         (set-default sym value)
-         ;; `crate-refresh-cache' is defined later in the file; the
-         ;; setter also runs at load time during defcustom
-         ;; initialization, before it exists (nothing cached then).
-         (when (fboundp 'crate-refresh-cache)
-           (crate-refresh-cache)))
   :group 'crate)
 
 
@@ -142,9 +138,10 @@ to, e.g., set `default-directory' to a local checkout."
 Returns a hash table keyed by canonical crate name, or nil if
 the file is missing or cannot be read.  Results are memoized
 via `with-memoization'; a :failed sentinel prevents retrying
-a corrupt or missing file on every subsequent call."
+a corrupt or missing file on every subsequent call.  The cache
+key includes `crate-data-path', so a path switch self-invalidates."
   (let ((cached
-         (with-memoization (gethash 'data crate--data-cache)
+         (with-memoization (gethash (list 'data crate-data-path) crate--data-cache)
            (if (and crate-data-path (file-exists-p crate-data-path))
                (condition-case nil
                    (let* ((db (sqlite-open crate-data-path))
@@ -204,7 +201,7 @@ automatically by the Nix expression)."
   :group 'crate)
 
 (defvar crate-doc--cache (make-hash-table :test #'equal)
-  "Cache mapping crate names to parsed rustdoc JSON.
+  "Cache mapping (crate name, database path) keys to parsed rustdoc JSON.
 Memoized — cleared by `crate-refresh-cache'.")
 
 (defun crate-doc--nix-path ()
@@ -250,7 +247,8 @@ result.  Returns nil if docs cannot be built, the crate has no
 JSON output, or a prior build attempt already failed."
   (when-let* ((table (and crate-doc-enable (crate--list))))
     (when (gethash name table)
-      (let ((cached (with-memoization (gethash name crate-doc--cache)
+      (let ((cached (with-memoization
+                      (gethash (list name crate-data-path) crate-doc--cache)
                     ;; Return :failed sentinel so with-memoization
                     ;; doesn't retry builds that already failed.
                     (or (when-let* ((store-path (crate-doc--build name)))
@@ -347,10 +345,12 @@ empty string when the description is missing or :null."
 (defun crate--deps (name)
   "Return dependency rows for crate NAME from the SQLite database.
 Returns a list of (dep_name req kind optional) lists, or nil.
-Memoized in `crate--data-cache'; a :failed sentinel prevents
-retrying failed queries, and nil results (no rows) are cached."
+Memoized in `crate--data-cache' keyed by database path; a :failed
+sentinel prevents retrying failed queries, and nil results (no
+rows) are cached."
   (when (and crate-data-path (file-exists-p crate-data-path))
-    (let ((cached (with-memoization (gethash (cons 'deps name) crate--data-cache)
+    (let ((cached (with-memoization
+                    (gethash (list 'deps crate-data-path name) crate--data-cache)
                     ;; Return :failed sentinel so with-memoization
                     ;; doesn't retry failed queries on every call.
                     (condition-case nil
@@ -621,14 +621,16 @@ bracketed tag before the name."
 
 (defvar crate--keys-cache (make-hash-table :test #'equal)
   "Cached list of lowercase crate names for completion.
-Memoized with a :failed sentinel; cleared by `crate-refresh-cache'.")
+Memoized with a :failed sentinel keyed by database path; cleared
+by `crate-refresh-cache'.")
 
 (defun crate--keys ()
   "Return the list of all crate names for completion.
 Loads from `crate-data-path' if needed and caches the result.
 An empty database yields nil (cached, not re-scanned per call)
 and a failed load stays failed until `crate-refresh-cache'."
-  (let ((cached (with-memoization (gethash 'keys crate--keys-cache)
+  (let ((cached (with-memoization
+                  (gethash (list 'keys crate-data-path) crate--keys-cache)
                   ;; Return :failed sentinel so with-memoization
                   ;; doesn't recompute on nil (empty database).
                   (let ((data (crate--list)))

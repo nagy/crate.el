@@ -97,7 +97,8 @@ is nil. Callers must use `(cadddr item)` to get docs:
    with `permanent-local` for `crate-name`, `crate-data`)
 2. defgroup / defcustom (including `crate--crates-io-url`
    `defconst`)
-3. Cache (hash-table vars, `with-memoization`, `crate-list-json`)
+3. Cache (hash-table vars, `with-memoization`, cache keys include
+   `crate-data-path` for self-invalidation)
 4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--build`,
    `crate-doc--json`, `crate-doc--module-tree`)
 5. Helpers (`crate--description`)
@@ -263,7 +264,12 @@ hash on every keystroke.
 
 JSON data and crate structure results use `with-memoization`
 on `(gethash key hash-table)`.  Since the SQLite database is a
-static file on disk, results never go stale.
+static file on disk, results never go stale — but they DO go
+stale across `crate-data-path` switches, so every cache key
+includes the path (`(list 'data crate-data-path)`, `(list 'deps
+path name)`, `(list name path)`, `(list 'keys path)`).  Plain
+`setq` of `crate-data-path` then self-invalidates; no defcustom
+`:set` function needed.
 
 ```elisp
 (with-memoization (gethash key cache)

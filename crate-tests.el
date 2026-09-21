@@ -228,23 +228,48 @@ record, not the top-level crate table)."
 
 
 
-(ert-deftest crate-data-path-setopt-refreshes-cache ()
-  "Setting `crate-data-path' via `setopt' clears the caches."
+(ert-deftest crate-data-path-setq-self-invalidates ()
+  "Plain `setq' of `crate-data-path' serves fresh data without refresh.
+Covers `crate--list' and `crate--keys' across nil -> db1 -> db2 switches."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate--keys-cache (make-hash-table :test 'equal))
         (crate-doc--cache (make-hash-table :test 'equal))
-        (tmpfile (make-temp-file "crate-test-" nil ".db")))
+        (db1 (crate-test--sqlite-db
+              '("serde" :name "serde" :latest_version "1.0.0")))
+        (db2 (crate-test--sqlite-db
+              '("tokio" :name "tokio" :latest_version "1.40.0"))))
     (unwind-protect
-        (progn
-          (puthash 'data :failed crate--data-cache)
-          (puthash "serde" t crate--keys-cache)
-          (puthash "serde" t crate-doc--cache)
-          (setopt crate-data-path tmpfile)
-          (should (equal crate-data-path tmpfile))
-          (should (= (hash-table-count crate--data-cache) 0))
-          (should (= (hash-table-count crate--keys-cache) 0))
-          (should (= (hash-table-count crate-doc--cache) 0)))
-      (delete-file tmpfile))))
+        (let ((crate-data-path nil))
+          ;; nil path caches the :failed negative...
+          (should-not (crate--list))
+          ;; ...then plain setq must serve db1 fresh — no refresh call.
+          (setq crate-data-path db1)
+          (should (gethash "serde" (crate--list)))
+          (should (member "serde" (crate--keys)))
+          ;; Second switch: db2 data, no db1 leftovers.
+          (setq crate-data-path db2)
+          (should (gethash "tokio" (crate--list)))
+          (should-not (gethash "serde" (crate--list)))
+          (should (member "tokio" (crate--keys)))
+          (should-not (member "serde" (crate--keys))))
+      (delete-file db1)
+      (delete-file db2))))
+
+(ert-deftest crate--deps-keyed-by-path ()
+  "`crate--deps' results don't leak across `crate-data-path' switches."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (current nil))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open)
+               (lambda (path) (setq current path) t))
+              ((symbol-function 'sqlite-select)
+               (lambda (&rest _)
+                 (list (list (format "dep-of-%s" current) "^1" "normal" 0))))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (let ((crate-data-path "/db1.db"))
+        (should (equal (caar (crate--deps "serde")) "dep-of-/db1.db")))
+      (let ((crate-data-path "/db2.db"))
+        (should (equal (caar (crate--deps "serde")) "dep-of-/db2.db"))))))
 
 
 (ert-deftest crate--keys-caches-empty-db ()
@@ -253,7 +278,7 @@ record, not the top-level crate table)."
     (cl-letf (((symbol-function 'crate--list)
                (lambda () (make-hash-table :test 'equal))))  ; empty table
       (should-not (crate--keys))
-      (should (gethash 'keys crate--keys-cache))
+      (should (gethash (list 'keys crate-data-path) crate--keys-cache))
       ;; Second call must not re-run crate--list (cache holds the sentinel).
       (let ((calls 0))
         (cl-letf (((symbol-function 'crate--list)
@@ -266,7 +291,7 @@ record, not the top-level crate table)."
   (let ((crate--keys-cache (make-hash-table :test 'equal)))
     (cl-letf (((symbol-function 'crate--list) (lambda () nil)))
       (should-not (crate--keys))
-      (should (gethash 'keys crate--keys-cache))
+      (should (gethash (list 'keys crate-data-path) crate--keys-cache))
       ;; Second call must not re-run crate--list.
       (let ((calls 0))
         (cl-letf (((symbol-function 'crate--list)
@@ -601,7 +626,7 @@ record, not the top-level crate table)."
                  '("htop" :description "process viewer")
                  '("neovim" :description "text editor")))
          (crate--data-cache (make-hash-table :test 'equal)))
-    (puthash 'data table crate--data-cache)
+    (puthash (list 'data crate-data-path) table crate--data-cache)
     (let ((entries (crate-browse--entries)))
       (should (= (length entries) 2))
       (should (assoc "htop" entries))
@@ -614,7 +639,7 @@ record, not the top-level crate table)."
                  '("ahash" :description "hash")
                  '("neovim" :description "text editor")))
          (crate--data-cache (make-hash-table :test 'equal)))
-    (puthash 'data table crate--data-cache)
+    (puthash (list 'data crate-data-path) table crate--data-cache)
     (let ((entries (crate-browse--entries)))
       (should (equal (mapcar #'car entries) '("ahash" "htop" "neovim"))))))
 
@@ -624,7 +649,7 @@ record, not the top-level crate table)."
                  '("htop" :description "process viewer")
                  '("neovim" :description "text editor")))
          (crate--data-cache (make-hash-table :test 'equal)))
-    (puthash 'data table crate--data-cache)
+    (puthash (list 'data crate-data-path) table crate--data-cache)
     (let ((entries (crate-browse--entries '("htop"))))
       (should (= (length entries) 1))
       (should (assoc "htop" entries)))))
@@ -679,7 +704,7 @@ record, not the top-level crate table)."
     (puthash "serde" (crate-test--data-hash :name "serde") table)
     (puthash "serde_derive" (crate-test--data-hash :name "serde_derive") table)
     (puthash "tokio" (crate-test--data-hash :name "tokio") table)
-    (puthash 'data table crate--data-cache)
+    (puthash (list 'data crate-data-path) table crate--data-cache)
     (cl-letf (((symbol-function 'switch-to-buffer) #'set-buffer)
               ((symbol-function 'crate-browse-crates)
                (lambda (&optional name-list name-prefix)
@@ -852,7 +877,7 @@ The negative result is cached as `:failed' so the build isn't retried."
                 (let ((content (buffer-string)))
                   (should (string-match-p "Name:.*serde" content))
                   (should-not (string-match-p "Modules:" content))))
-              (should (eq (gethash "serde" crate-doc--cache) :failed))
+              (should (eq (gethash (list "serde" crate-data-path) crate-doc--cache) :failed))
               ;; Cached negative: second visit must not re-attempt the build.
               (let ((calls 0))
                 (cl-letf (((symbol-function 'call-process)
