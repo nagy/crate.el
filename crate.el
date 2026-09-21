@@ -33,6 +33,7 @@
 ;; Commands:
 ;;
 ;;   M-x find-crate  -- look up a Rust crate by name
+;;   M-x crate-copy-dependency -- copy a Cargo.toml dependency line
 ;;
 ;; Deep integration:
 ;;
@@ -466,6 +467,11 @@ dependency crate name as a link to its crates.io page.  Returns nil
 unless point is on text carrying a `crate-url' property."
   (get-text-property (point) 'crate-url))
 
+(defvar-keymap crate-mode-map
+  :doc "Keymap for `crate-mode'."
+  :parent special-mode-map
+  "w" #'crate-copy-dependency)
+
 (define-derived-mode crate-mode special-mode "Crate"
   "Major mode for displaying Rust crate details.
 
@@ -761,6 +767,7 @@ and delegates to `find-crate'."
   :parent tabulated-list-mode-map
   "RET" #'crate-browse-visit
   "b"   #'crate-browse-search-url
+  "w"   #'crate-copy-dependency
   "g"   #'crate-browse-refresh)
 
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
@@ -906,6 +913,36 @@ coexist in separate buffers."
     (switch-to-buffer buf)))
 
 
+;;; Dependency Copy
+
+(defun crate-copy-dependency (&optional name)
+  "Copy a Cargo.toml dependency line for crate NAME to the kill-ring.
+The line has the form NAME = \"VERSION\", ready to paste into a
+`[dependencies]' section.  When the version cannot be determined,
+it falls back to \"*\".  Interactively, NAME is the current crate
+in `crate-mode' or the entry at point in `crate-browse-mode';
+Embark passes its candidate directly."
+  (interactive)
+  (let* ((name (or name
+                   (cond
+                    ((derived-mode-p 'crate-mode) crate-name)
+                    ((derived-mode-p 'crate-browse-mode)
+                     (crate-browse--current-name))
+                    (t (user-error "No crate to copy")))))
+         (data (or (and crate-name (string= name crate-name) crate-data)
+                   (let ((table (crate--list)))
+                     (when table
+                       (or (gethash name table)
+                           (gethash (crate--canonical-name name) table))))))
+         (version (and data (gethash "latest_version" data)))
+         (line (format "%s = \"%s\"" name
+                       (if (and version (not (eq version :null)))
+                           version
+                         "*"))))
+    (kill-new line)
+    (message "Copied: %s" line)))
+
+
 ;;; Embark
 
 (defvar embark-exporters-alist)
@@ -932,6 +969,7 @@ can re-derive results from the live cache."
     :parent embark-general-map
     "RET" #'find-crate
     "b"   #'crate--embark-browse-url
+    "w"   #'crate-copy-dependency
     "i"   #'insert)
   (add-to-list 'embark-exporters-alist
                '(crate . crate--embark-export))

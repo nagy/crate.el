@@ -122,7 +122,11 @@ is nil. Callers must use `(cadddr item)` to get docs:
 12. Org Integration (deferred load of `ol-crate`)
 13. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
-14. Embark (action keymap `crate-embark-map`, export function,
+14. Dependency Copy (`crate-copy-dependency`, bound to `w` in
+    `crate-mode-map`, `crate-browse-mode-map`, and
+    `crate-embark-map`; copies `NAME = "VERSION"` for
+    `Cargo.toml`)
+15. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions

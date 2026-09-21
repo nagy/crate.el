@@ -766,6 +766,44 @@ Substituted at build time by default.nix.")
         (kill-buffer buf)))))
 
 
+;;; Dependency copy
+
+(ert-deftest crate-copy-dependency-from-crate-mode ()
+  "Copies NAME = \"VERSION\" from crate buffer locals."
+  (let ((kill-ring nil) (kill-ring-yank-pointer nil))
+    (crate-test--with-crate "serde"
+                            (crate-test--data-hash :name "serde"
+                                                   :latest_version "1.0.200")
+      (cl-letf (((symbol-function 'message) (lambda (&rest _) nil)))
+        (crate-copy-dependency "serde")))
+    (should (equal (car kill-ring) "serde = \"1.0.200\""))))
+
+(ert-deftest crate-copy-dependency-from-browse ()
+  "Copies the line for the entry at point in `crate-browse-mode'."
+  (let ((kill-ring nil) (kill-ring-yank-pointer nil))
+    (cl-letf (((symbol-function 'crate--list)
+               (lambda () (crate-test--crate-table
+                           '("tokio" :name "tokio" :latest_version "1.40.0"))))
+              ((symbol-function 'crate-browse--current-name) (lambda () "tokio"))
+              ((symbol-function 'message) (lambda (&rest _) nil)))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (crate-copy-dependency)))
+    (should (equal (car kill-ring) "tokio = \"1.40.0\""))))
+
+(ert-deftest crate-copy-dependency-missing-version ()
+  "A missing version falls back to \"*\" (still valid TOML)."
+  (let ((kill-ring nil) (kill-ring-yank-pointer nil))
+    (cl-letf (((symbol-function 'crate--list)
+               (lambda () (crate-test--crate-table '("foo" :name "foo"))))
+              ((symbol-function 'crate-browse--current-name) (lambda () "foo"))
+              ((symbol-function 'message) (lambda (&rest _) nil)))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (crate-copy-dependency)))
+    (should (equal (car kill-ring) "foo = \"*\""))))
+
+
 ;;; Doc build
 
 (ert-deftest crate-doc-build-missing-nix ()
