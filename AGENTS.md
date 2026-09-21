@@ -71,7 +71,9 @@ Files:
    `(NAME KIND (CHILDREN...) DOC)` tuples. `KIND` is a symbol (struct,
    trait, function, module, macro, enum, etc.).
 5. **`insert-doc-tree`** — `cl-labels` helper in `crate-mode`. Renders
-   the tree with indentation; shows doc summaries after leaf items,
+   the tree with indentation, each item prefixed with its KIND as a
+   bracketed tag (`- [struct] name`, fontified via
+   `crate-font-lock-keywords`); shows doc summaries after leaf items,
    skips `:null`-named items (use imports).
 
 ### Tree tuple shape

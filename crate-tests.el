@@ -824,6 +824,27 @@ The negative result is cached as `:failed' so the build isn't retried."
               (kill-buffer buf))))
       (delete-file tmpfile))))
 
+(ert-deftest crate-mode-renders-kind-tags ()
+  "The module tree renders KIND as a bracketed tag before each name."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable t))
+    (crate-test--with-crate "test-crate"
+                            (crate-test--data-hash :name "test-crate")
+      (cl-letf (((symbol-function 'crate-doc--json) (lambda (_) t))
+                ((symbol-function 'crate-doc--module-tree)
+                 (lambda (_)
+                   '(("mymod" module
+                      (("myfn" function nil "Does things.")
+                       ("MyType" struct nil nil))
+                      nil)))))
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (let ((content (buffer-string)))
+            (should (string-match-p "\\[module\\] mymod" content))
+            (should (string-match-p "\\[function\\] myfn" content))
+            (should (string-match-p "\\[struct\\] MyType" content))))))))
+
 (ert-deftest crate-doc-module-tree-flat ()
   "`crate-doc--module-tree' on a flat module (no children)."
   (let* ((json (json-parse-string

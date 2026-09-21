@@ -449,7 +449,10 @@ Inherits from `package-description' when available."
      (1 'crate-id))
     ;; Crate id number
     ("^Id:[[:space:]]+\\([0-9]+\\)"
-     (1 'crate-id)))
+     (1 'crate-id))
+    ;; Kind tags in the rustdoc module tree ("- [struct] name")
+    ("^[[:space:]]*- \\(\\[[a-z]+\\]\\)"
+     (1 'crate-version)))
   "Font-lock keywords for `crate-mode'.")
 
 ;;; Major Mode
@@ -511,15 +514,19 @@ If the value is nil or :null, nothing is inserted after the label."
            (insert "\n"))
          (insert-doc-tree (items level)
            "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation.
-Each item is (NAME KIND CHILDREN DOC)."
+Each item is (NAME KIND CHILDREN DOC); KIND renders as a
+bracketed tag before the name."
            (dolist (item items)
              (let ((name (car item))
-                   (_kind (cadr item))
+                   (kind (cadr item))
                    (children (caddr item))
                    (docs (cadddr item)))
                (unless (eq name :null)
                  (insert (make-string (* level 2) ?\s)
-                         "- " name)
+                         "- ")
+                 (when kind
+                   (insert (format "[%s] " kind)))
+                 (insert name)
                  (if children
                      (progn
                        (insert "\n")
