@@ -80,6 +80,10 @@ The database should contain a `crates' table with columns:
 name, display_name, description, documentation, homepage,
 repository, created_at, updated_at.
 
+The `name` column holds the published crate name, `display_name`
+the pretty form.  Lookups use canonical names (see
+`crate--canonical-name`); display uses the `name' field.
+
 All caches key on this path, so changing it — even via plain
 `setq' — serves fresh data with no `crate-refresh-cache' call."
   :type 'file
@@ -160,7 +164,9 @@ key includes `crate-data-path', so a path switch self-invalidates."
                           (table (make-hash-table :test #'equal)))
                      (dolist (row rows)
                        (let ((entry (make-hash-table :test #'equal)))
-                         (puthash "name" (nth 1 row) entry)
+                         (puthash "name" (nth 0 row) entry)
+                         (when (nth 1 row)
+                           (puthash "display_name" (nth 1 row) entry))
                          (when (nth 2 row)
                            (puthash "description" (nth 2 row) entry))
                          (when (nth 3 row)
@@ -178,7 +184,7 @@ key includes `crate-data-path', so a path switch self-invalidates."
                          (when (nth 9 row)
                            (puthash "license" (nth 9 row) entry))
                          (puthash "downloads" (or (nth 10 row) 0) entry)
-                         (puthash (nth 0 row) entry table)))
+                         (puthash (crate--canonical-name (nth 0 row)) entry table)))
                      table)
                  (error :failed))
              :failed))))
@@ -667,15 +673,20 @@ and a failed load stays failed until `crate-refresh-cache'."
                   (gethash (list 'keys crate-data-path) crate--keys-cache)
                   ;; Return :failed sentinel so with-memoization
                   ;; doesn't recompute on nil (empty database).
-                  (let ((data (crate--list)))
-                    (or (and data (hash-table-keys data))
-                        :failed)))))
+                  (let* ((data (crate--list))
+                         (names (when data
+                                  (mapcar (lambda (entry) (gethash "name" entry))
+                                          (hash-table-values data)))))
+                    ;; Published names — what users type and see.
+                    (or names :failed)))))
     (unless (eq cached :failed)
       cached)))
 
 (defun crate--annotate (candidate)
   "Completion annotation function for crate CANDIDATE."
-  (let* ((data (gethash candidate (crate--list)))
+  (let* ((table (crate--list))
+         (data (when table
+                 (gethash (crate--canonical-name candidate) table)))
          (desc (and data (gethash "description" data))))
     (when (and desc (not (eq desc :null))
                (not (string-empty-p desc)))
@@ -864,11 +875,14 @@ initial display is deterministic (hash iteration order is not)."
     (when items
       (if name-list
           (dolist (name name-list (sort entries #'crate-browse--entry-less))
-            (let ((data (gethash name items)))
+            (let ((data (or (gethash name items)
+                            (gethash (crate--canonical-name name) items))))
               (when data
-                (push (crate-browse--entry name data) entries))))
-        (maphash (lambda (name data)
-                   (push (crate-browse--entry name data) entries))
+                (push (crate-browse--entry (or (gethash "name" data) name) data)
+                      entries))))
+        (maphash (lambda (key data)
+                   (push (crate-browse--entry (or (gethash "name" data) key) data)
+                         entries))
                  items)
         (setq entries (sort entries #'crate-browse--entry-less))))))
 
@@ -901,9 +915,11 @@ NAME-PREFIX matches as a substring (not a prefix)."
   (let ((names nil)
         (items (crate--list)))
     (when items
-      (maphash (lambda (name _data)
-                 (when (string-match-p (regexp-quote name-prefix) name)
-                   (push name names)))
+      (maphash (lambda (_key data)
+                 (let ((name (gethash "name" data)))
+                   (when (and name
+                              (string-match-p (regexp-quote name-prefix) name))
+                     (push name names))))
                items)
       (nreverse names))))
 

@@ -857,6 +857,61 @@ Substituted at build time by default.nix.")
     (should (equal (car kill-ring) "foo = \"*\""))))
 
 
+;;; Canonical names
+
+(ert-deftest crate-find-crate-hyphenated-name ()
+  "Hyphenated crate names resolve via canonical keys.
+Published name, canonical form, and versioned URL all open the crate."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate--keys-cache (make-hash-table :test 'equal))
+        (crate-doc--cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (tmpfile (crate-test--sqlite-db
+                  '("async-trait" :name "async-trait" :description "derive macros"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (cl-letf (((symbol-function 'switch-to-buffer)
+                     (lambda (bufname &optional _norecord)
+                       (set-buffer (get-buffer-create bufname)))))
+            ;; Published name…
+            (find-crate "async-trait")
+            (should (get-buffer "Crate: async_trait"))
+            (with-current-buffer "Crate: async_trait"
+              (should (string-match-p "Name:.*async-trait" (buffer-string))))
+            ;; …canonical form…
+            (find-crate "async_trait")
+            ;; …and a versioned URL all resolve.
+            (find-crate "https://crates.io/crates/async-trait/0.1.80")
+            (kill-buffer (get-buffer "Crate: async_trait"))))
+      (delete-file tmpfile))))
+
+(ert-deftest crate-completion-offers-published-names ()
+  "Completion offers published (hyphenated) names; annotate resolves them."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate--keys-cache (make-hash-table :test 'equal))
+        (tmpfile (crate-test--sqlite-db
+                  '("async-trait" :name "async-trait" :description "derive macros"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (should (member "async-trait" (crate--keys)))
+          (should-not (member "async_trait" (crate--keys)))
+          (should (string-match-p "derive macros"
+                                  (or (crate--annotate "async-trait") ""))))
+      (delete-file tmpfile))))
+
+(ert-deftest crate-browse-entries-show-published-names ()
+  "Browse rows use the published name, not the canonical key."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (tmpfile (crate-test--sqlite-db
+                  '("async-trait" :name "async-trait" :description "derive macros"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (let ((entries (crate-browse--entries)))
+            (should (assoc "async-trait" entries))
+            (should-not (assoc "async_trait" entries))))
+      (delete-file tmpfile))))
+
+
 ;;; Doc build
 
 (ert-deftest crate-doc-build-missing-nix ()

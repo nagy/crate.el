@@ -252,6 +252,14 @@ use `defconst`:
   "Base URL for crates.io crate pages.")
 ```
 
+### Canonical crate names
+
+`crate--list` keys its hash by `crate--canonical-name` (downcase,
+hyphens to underscores), so every lookup canonicalizes input and
+stays single-form.  The entry's `"name"` field holds the published
+crate name — display, completion candidates, and URLs use it,
+never the hash key.  `"display_name"` holds the pretty form.
+
 ### Completion conventions
 
 The completion collection function (`crate--collection`) returns
@@ -404,6 +412,9 @@ against it in the `when-let*` binding, not in the body:
 - Tests that need `browse-url-default-handlers` must `(require
   'browse-url)` first — `crate-install-browse-url-handler` uses
   `with-eval-after-load`, which is a no-op if browse-url isn't loaded.
+- Hyphenated-name tests use `crate-test--sqlite-db` with a row
+  named e.g. `async-trait`; assert published names surface while
+  lookups accept both forms.
 - `crate-visit-hook` tests bind the hook to nil locally and
   `add-hook` their lambda, then assert on `(buffer-name)`, `crate-name`,
   and `crate-data` inside the hook — verifying it fires once per
