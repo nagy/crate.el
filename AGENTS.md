@@ -453,6 +453,19 @@ A menu click leaves point alone, so each menu command wraps
 `crate-browse--context-command`, which restores the buffer and
 moves point before the command runs.
 
+**Exports read the printed buffer, not the cache.**
+`crate-browse-export-cargo' (`e c') and
+`crate-browse-export-markdown' (`e m') walk the lines through
+`crate-browse--rows', so an export follows the current sort and the
+filter.  The Cargo export reuses `crate--dependency-line', the same
+formatter as `crate-copy-dependency', so an unknown version becomes
+`\"*\"'.  The Markdown export escapes a pipe and strips text
+properties.  Both live under the `e' prefix keymap
+`crate-browse-export-map' and write a `special-mode' buffer through
+`crate-browse--export-buffer'.  `crate--display-buffer' is the one
+place that honors `crate-display-buffer-action', and `find-crate'
+uses it too.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via

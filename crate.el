@@ -172,6 +172,12 @@ Emacs has no ready-made action for this: it reuses a window that
 already shows the buffer, or splits one, and never uses the
 selected window.")
 
+(defun crate--display-buffer (buffer)
+  "Show BUFFER through `crate-display-buffer-action'."
+  (if crate-display-buffer-action
+      (pop-to-buffer buffer crate-display-buffer-action)
+    (switch-to-buffer buffer)))
+
 ;;; Cache
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
@@ -860,9 +866,7 @@ message naming the requested version.  Creates a new buffer named
       (unless entry
         (user-error "Crate `%s' not found" cand))
       (let ((bufname (format "Crate: %s" cand)))
-        (if crate-display-buffer-action
-            (pop-to-buffer bufname crate-display-buffer-action)
-          (switch-to-buffer bufname))
+        (crate--display-buffer bufname)
         (crate-mode)
         ;; Set the crate locals after `crate-mode' (whose
         ;; `kill-all-local-variables' would otherwise wipe them),
@@ -920,6 +924,11 @@ and delegates to `find-crate'."
 
 ;;; Browse Mode
 
+(defvar-keymap crate-browse-export-map
+  :doc "Export keymap for `crate-browse-mode'."
+  "c" #'crate-browse-export-cargo
+  "m" #'crate-browse-export-markdown)
+
 (defvar-keymap crate-browse-mode-map
   :doc "Keymap for `crate-browse-mode'."
   :parent tabulated-list-mode-map
@@ -930,7 +939,8 @@ and delegates to `find-crate'."
   "b"   #'crate-browse-search-url
   "w"   #'crate-copy-dependency
   "{"   #'crate-browse-narrow-column
-  "}"   #'crate-browse-widen-column)
+  "}"   #'crate-browse-widen-column
+  "e"   crate-browse-export-map)
 
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
   "Major mode for browsing Rust crates in a sortable table.
@@ -943,6 +953,8 @@ and delegates to `find-crate'."
 \\[crate-browse-widen-column] and \\[crate-browse-narrow-column] to
 resize a column,
 \\[revert-buffer] to reload the data.
+The `e' prefix exports the visible rows: \\[crate-browse-export-cargo]
+and \\[crate-browse-export-markdown].
 
 The table shrinks its columns when the window is narrow."
   :interactive nil
@@ -1191,6 +1203,12 @@ stays.  `crate-browse-mode' adds this function to
         (define-key-after menu [crate-browse-copy-dependency]
           (list 'menu-item "Copy Dependency Line"
                 (funcall command (lambda () (crate-copy-dependency name)))))
+        (define-key-after menu [crate-browse-export-cargo]
+          (list 'menu-item "Export as Cargo.toml"
+                #'crate-browse-export-cargo))
+        (define-key-after menu [crate-browse-export-markdown]
+          (list 'menu-item "Export as Markdown"
+                #'crate-browse-export-markdown))
         (define-key-after menu [crate-browse-search-url]
           (list 'menu-item "Open on crates.io"
                 (funcall command
@@ -1408,6 +1426,104 @@ as a user error."
       (crate-browse--display (crate-browse--name-at-event event)
                             crate--other-window-action))))
 
+;;; Export
+
+(defun crate-browse--rows ()
+  "Return the rows of the current table buffer in display order.
+Each row is a cons of its entry ID and its column vector.  A line
+without an entry adds no row."
+  (save-excursion
+    (goto-char (point-min))
+    (let (rows)
+      (while (not (eobp))
+        (when-let* ((columns (tabulated-list-get-entry)))
+          (push (cons (tabulated-list-get-id) columns) rows))
+        (forward-line 1))
+      (nreverse rows))))
+
+(defun crate-browse--export-cell (cell)
+  "Return table CELL as plain text on one line.
+A cell holds a string or a cons of a label and button properties.
+The face of a cell goes away with the properties."
+  (string-trim
+   (replace-regexp-in-string
+    "[ \t\n\r]+" " "
+    (substring-no-properties (crate-browse--cell-text cell)))))
+
+(defun crate-browse--export-markdown (rows)
+  "Return ROWS as a Markdown table.
+ROWS comes from `crate-browse--rows'.  The header names the columns
+of `tabulated-list-format'.  A pipe inside a cell is escaped, so
+the table keeps its shape."
+  (let* ((labels (mapcar (lambda (column) (car column))
+                         (append tabulated-list-format nil)))
+         (line (lambda (cells)
+                 (concat "| "
+                         (mapconcat (lambda (text)
+                                      (string-replace "|" "\\|" text))
+                                    cells " | ")
+                         " |")))
+         (header (funcall line labels))
+         (separator (concat "|"
+                            (mapconcat (lambda (_label) " --- |")
+                                       labels "")))
+         (body '()))
+    (dolist (row rows)
+      (push (funcall line (mapcar #'crate-browse--export-cell
+                                  (append (cdr row) nil)))
+            body))
+    (concat (mapconcat #'identity
+                       (cons header (cons separator (nreverse body)))
+                       "\n")
+            "\n")))
+
+(defun crate-browse--export-cargo (rows)
+  "Return ROWS as `Cargo.toml' dependency lines.
+The lines read the Version cell of each row, so the export follows
+the visible data."
+  (if (null rows)
+      ""
+    (concat (mapconcat (lambda (row)
+                         (crate--dependency-line
+                          (car row)
+                          (crate-browse--export-cell (aref (cdr row) 1))))
+                       rows "\n")
+            "\n")))
+
+(defun crate-browse--export-buffer (label text)
+  "Show TEXT in a read-only export buffer named for LABEL.
+A repeat export of the same format reuses the buffer."
+  (let ((buffer (get-buffer-create (format "*Crates export: %s*" label))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text)
+        (goto-char (point-min))
+        (special-mode)
+        (set-buffer-modified-p nil)))
+    (crate--display-buffer buffer)))
+
+(defun crate-browse-export-cargo ()
+  "Export the visible table rows as `Cargo.toml' dependency lines.
+The export follows the current sort and the filter.  Paste the
+block into a `[dependencies]' section."
+  (interactive)
+  (unless (derived-mode-p 'crate-browse-mode)
+    (user-error "Not a crate table buffer"))
+  (crate-browse--export-buffer "Cargo.toml"
+                              (crate-browse--export-cargo
+                               (crate-browse--rows))))
+
+(defun crate-browse-export-markdown ()
+  "Export the visible table rows to a read-only Markdown buffer.
+The export follows the current sort and the filter."
+  (interactive)
+  (unless (derived-mode-p 'crate-browse-mode)
+    (user-error "Not a crate table buffer"))
+  (crate-browse--export-buffer "markdown"
+                              (crate-browse--export-markdown
+                               (crate-browse--rows))))
+
 (defun crate-browse--reload ()
   "Rebuild `tabulated-list-entries' from the buffer-local filter.
 The `tabulated-list-revert-hook' of a browse buffer calls this, so
@@ -1474,6 +1590,16 @@ coexist in separate buffers."
 
 ;;; Dependency Copy
 
+(defun crate--dependency-line (name version)
+  "Return a `Cargo.toml' dependency line for crate NAME at VERSION.
+VERSION is the published version string, or nil, `:null' or an
+empty string when the version is unknown, which becomes \"*\"."
+  (declare (pure t) (side-effect-free t))
+  (format "%s = \"%s\"" name
+          (if (and (stringp version) (not (string-empty-p version)))
+              version
+            "*")))
+
 (defun crate-copy-dependency (&optional name)
   "Copy a Cargo.toml dependency line for crate NAME to the kill-ring.
 The line has the form NAME = \"VERSION\", ready to paste into a
@@ -1494,10 +1620,7 @@ Embark passes its candidate directly."
                        (or (gethash name table)
                            (gethash (crate--canonical-name name) table))))))
          (version (and data (gethash "latest_version" data)))
-         (line (format "%s = \"%s\"" name
-                       (if (and version (not (eq version :null)))
-                           version
-                         "*"))))
+         (line (crate--dependency-line name version)))
     (kill-new line)
     (message "Copied: %s" line)))
 

@@ -1102,6 +1102,107 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
             (should (= (point) 7))))
       (kill-buffer buffer))))
 
+(ert-deftest crate-browse-rows-skips-blank-lines ()
+  "`crate-browse--rows' returns one row per entry, in display order."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "ahash" (vector "ahash" "0.8.0" "hash"))
+                (list "serde" (vector "serde" "1.0.0" "framework"))))
+    (tabulated-list-print)
+    (let ((rows (crate-browse--rows)))
+      (should (equal (mapcar #'car rows) '("ahash" "serde")))
+      (should (equal (aref (cdar rows) 1) "0.8.0")))))
+
+(ert-deftest crate-browse-export-cell-strips-properties ()
+  "An exported cell has no faces and no newlines."
+  (should (equal (crate-browse--export-cell
+                  (propertize "a\nb   c" 'face 'bold))
+                 "a b c"))
+  (should (equal (crate-browse--export-cell nil) "")))
+
+(ert-deftest crate-browse-export-cargo-lines ()
+  "The Cargo export writes one dependency line per row."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "ahash" (vector "ahash" "0.8.11" "hash"))
+                (list "serde" (vector "serde" "1.0.228" "framework"))))
+    (tabulated-list-print)
+    (should (equal (crate-browse--export-cargo (crate-browse--rows))
+                   "ahash = \"0.8.11\"\nserde = \"1.0.228\"\n"))))
+
+(ert-deftest crate-browse-export-cargo-missing-version ()
+  "A row without a version exports as a wildcard requirement."
+  (should (equal (crate-browse--export-cargo
+                  (list (cons "foo" (vector "foo" "" ""))))
+                 "foo = \"*\"\n"))
+  (should (equal (crate-browse--export-cargo nil) "")))
+
+(ert-deftest crate-browse-export-markdown-table ()
+  "The Markdown export writes a header, a separator and the rows."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "serde" (vector "serde" "1.0.228" "a | b"))))
+    (tabulated-list-print)
+    (let ((text (crate-browse--export-markdown (crate-browse--rows))))
+      (should (string-prefix-p "| Crate | Version | Description |\n" text))
+      (should (string-match-p "^| --- | --- | --- |$" text))
+      (should (string-match-p "^| serde | 1.0.228 | a \\\\| b |$" text)))))
+
+(ert-deftest crate-browse-export-markdown-follows-sort ()
+  "The Markdown export follows the printed order, not the cache."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "a" (vector "a" "1.9.0" ""))
+                (list "b" (vector "b" "1.10.0" ""))))
+    (setq tabulated-list-sort-key '("Version" . nil))
+    (tabulated-list-print)
+    (let ((text (crate-browse--export-markdown (crate-browse--rows))))
+      (should (< (string-search "1.9.0" text) (string-search "1.10.0" text))))))
+
+(ert-deftest crate-browse-export-buffer-is-read-only ()
+  "An export lands in a read-only buffer that keeps its text."
+  (let ((buffer nil))
+    (cl-letf (((symbol-function 'switch-to-buffer)
+               (lambda (name) (setq buffer (get-buffer name)))))
+      (crate-browse--export-buffer "markdown" "| a |\n"))
+    (should buffer)
+    (with-current-buffer buffer
+      (should (eq major-mode 'special-mode))
+      (should (equal (buffer-string) "| a |\n"))
+      (should buffer-read-only))
+    (kill-buffer buffer)))
+
+(ert-deftest crate-browse-export-commands-refuse-other-buffers ()
+  "The export commands signal outside a table buffer."
+  (with-temp-buffer
+    (fundamental-mode)
+    (should-error (crate-browse-export-cargo) :type 'user-error)
+    (should-error (crate-browse-export-markdown) :type 'user-error)))
+
+(ert-deftest crate-browse-export-keymap-is-bound ()
+  "`e' is the export prefix, with c for Cargo.toml and m for Markdown."
+  (should (eq (lookup-key crate-browse-mode-map "e")
+              crate-browse-export-map))
+  (should (eq (lookup-key crate-browse-export-map "c")
+              #'crate-browse-export-cargo))
+  (should (eq (lookup-key crate-browse-export-map "m")
+              #'crate-browse-export-markdown)))
+
+(ert-deftest crate-dependency-line-shapes ()
+  "`crate--dependency-line' writes a bare-key TOML line."
+  (should (equal (crate--dependency-line "serde" "1.0.0")
+                  "serde = \"1.0.0\""))
+  (should (equal (crate--dependency-line "async-trait" :null)
+                  "async-trait = \"*\""))
+  (should (equal (crate--dependency-line "foo" "")
+                  "foo = \"*\""))
+  (should (equal (crate--dependency-line "foo" nil)
+                  "foo = \"*\"")))
+
 ;;; End-to-end tests with test data
 
 (defvar crate-test--data-file "@testCratesDb@"
