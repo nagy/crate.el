@@ -418,7 +418,11 @@ lands right.  The browse command fits before its first print,
 because that print lands in the selected window.  A frame resize
 schedules one refit per buffer through `run-at-time' (redisplay
 runs `window-size-change-functions'), and the refit reprints only
-when a width changed.  `tabulated-list-format' is buffer-local, so
+when a width changed.  The refit reprints, and `tabulated-list-print'
+sorts the entries again, so `crate-browse-refit-max-entries' skips a
+table above that size (nil refits every table).  A full crates.io
+dump keeps the widths of its last fit instead of stalling on a
+resize.  `tabulated-list-format' is buffer-local, so
 one width serves every window, and a manual resize lasts until the
 next frame resize.
 

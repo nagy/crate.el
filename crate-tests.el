@@ -944,6 +944,26 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
             (should-not crate-browse--fit-timer))
         (crate-browse--cancel-fit)))))
 
+(ert-deftest crate-browse-refit-skips-a-large-table ()
+  "A table above `crate-browse-refit-max-entries' keeps its widths."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "a" (vector "a" "1.0.0" ""))
+                (list "b" (vector "b" "1.0.0" ""))
+                (list "c" (vector "c" "1.0.0" ""))))
+    (let ((buffer (current-buffer))
+          (crate-browse-refit-max-entries 2))
+      (unwind-protect
+          (progn
+            (crate-browse--schedule-refit buffer (selected-window))
+            (should-not crate-browse--fit-timer)
+            ;; A nil cutoff refits every table.
+            (let ((crate-browse-refit-max-entries nil))
+              (crate-browse--schedule-refit buffer (selected-window))
+              (should (timerp crate-browse--fit-timer))))
+        (crate-browse--cancel-fit)))))
+
 (ert-deftest crate-browse-window-size-change-skips-other-buffers ()
   "The frame hook ignores a window whose buffer is no crate table."
   (with-temp-buffer

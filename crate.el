@@ -113,6 +113,15 @@ how much the columns before it must give up."
   :type 'integer
   :group 'crate)
 
+(defcustom crate-browse-refit-max-entries 2000
+  "Largest table that refits its columns after a window size change.
+A refit reprints the table, and `tabulated-list-print' sorts the
+entries again, so a full crates.io dump would stall on every frame
+resize.  A table above this size keeps the widths of its last fit.
+Set it to nil to refit every table."
+  :type '(choice (const :tag "Every table" nil) integer)
+  :group 'crate)
+
 (defcustom crate-browse-version-max-width 28
   "Widest Version column of a browse table.
 The column grows to the longest visible version, up to this width,
@@ -1328,13 +1337,21 @@ base widths, so the Version column follows the visible rows."
         (tabulated-list-init-header)
         (tabulated-list-print t)))))
 
+(defun crate-browse--refit-p ()
+  "Return non-nil when the current table may refit after a resize."
+  (or (null crate-browse-refit-max-entries)
+      (not (listp tabulated-list-entries))
+      (<= (length tabulated-list-entries) crate-browse-refit-max-entries)))
+
 (defun crate-browse--schedule-refit (buffer window)
   "Refit BUFFER for WINDOW after the current redisplay.
 Redisplay runs the window size hook, so the reprint waits for a
-timer.  One pending timer per buffer is enough."
+timer.  One pending timer per buffer is enough.  A table larger
+than `crate-browse-refit-max-entries' keeps its widths."
   (when (and (buffer-live-p buffer)
              (not (timerp (buffer-local-value 'crate-browse--fit-timer
-                                              buffer))))
+                                              buffer)))
+             (with-current-buffer buffer (crate-browse--refit-p)))
     (with-current-buffer buffer
       (setq crate-browse--fit-timer
             (run-at-time 0 nil #'crate-browse--refit window)))))

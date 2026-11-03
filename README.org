@@ -50,7 +50,9 @@ writes a Markdown table.  An export follows the current sort and
 the filter.
 
 A narrow window shrinks the columns instead of pushing the
-description off the screen.  Set =crate-display-buffer-action= to
+description off the screen.  A table larger than
+=crate-browse-refit-max-entries= keeps its widths, because a reprint
+of a full crates.io dump on every resize would stall.  Set =crate-display-buffer-action= to
 =crate--other-window-action= to open every crate beside the buffer
 that you started from.
 
