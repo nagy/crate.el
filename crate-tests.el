@@ -785,8 +785,12 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
                  '(1 0 0 ("rc" 1))))
   (should (equal (crate--version-parts "1.0.0+20130313144700")
                  '(1 0 0 nil)))
+  ;; A two- or one-segment version pads the missing parts with 0.
+  (should (equal (crate--version-parts "0.1") '(0 1 0 nil)))
+  (should (equal (crate--version-parts "1") '(1 0 0 nil)))
+  (should (equal (crate--version-parts "0.1-pre.1") '(0 1 0 ("pre" 1))))
   (should-not (crate--version-parts "not a version"))
-  (should-not (crate--version-parts "1.0"))
+  (should-not (crate--version-parts "1."))
   (should-not (crate--version-parts nil)))
 
 (ert-deftest crate--version-lessp-numeric-segments ()
@@ -794,7 +798,10 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
   (should (crate--version-lessp "1.9.0" "1.10.0"))
   (should-not (crate--version-lessp "1.10.0" "1.9.0"))
   (should (crate--version-lessp "0.3.1" "0.10.2"))
-  (should (crate--version-lessp "1.0.228" "10.0.0")))
+  (should (crate--version-lessp "1.0.228" "10.0.0"))
+  ;; A short version compares as a number, not as a string.
+  (should (crate--version-lessp "0.9" "0.10"))
+  (should-not (crate--version-lessp "0.10" "0.9")))
 
 (ert-deftest crate--version-lessp-pre-release ()
   "A pre-release sorts before its release, per semver precedence."

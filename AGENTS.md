@@ -406,6 +406,10 @@ any pre-release ("1.0.0-rc.1"), and crates.io publishes those.
 `crate--version-lessp' parses semver itself (`crate--version-parts`
 plus `crate--semver-pre-lessp`), drops build metadata, falls back
 to `string<' on garbage, and sorts an empty version last.
+`crate--version-parts' makes the minor and patch segments optional
+and pads them with 0, because a few old crates publish `0.1' and
+that value must not fall through to the string comparison (`0.9'
+would then land after `0.10').
 `crate-browse--cell-text' is the one reader of a cell that may be
 a string or a `(LABEL . PROPS)' cons.
 

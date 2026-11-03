@@ -1007,21 +1007,24 @@ replace it with the widths that it saved.")
   "Pending timer that refits this table after a window size change.")
 
 (defconst crate--version-re
-  "\\`\\([0-9]+\\)\\.\\([0-9]+\\)\\.\\([0-9]+\\)\\(?:-\\([^+]+\\)\\)?\\(?:\\+.*\\)?\\'"
-  "Regexp splitting a semver string into its numeric and pre-release parts.")
+  "\\`\\([0-9]+\\)\\(?:\\.\\([0-9]+\\)\\)?\\(?:\\.\\([0-9]+\\)\\)?\\(?:-\\([^+]+\\)\\)?\\(?:\\+.*\\)?\\'"
+  "Regexp splitting a version string into its numeric and pre-release parts.
+The minor and patch groups are optional, because a few old crates
+publish a two-segment version such as \"0.1\".")
 
 (defun crate--version-parts (version)
   "Return VERSION as (MAJOR MINOR PATCH PRE), or nil if it is no semver.
-MAJOR, MINOR and PATCH are integers.  PRE is nil for a release, or
-a list of pre-release identifiers, each an integer or a string.
-The build metadata after a plus sign does not affect precedence,
-so it is dropped."
+MAJOR, MINOR and PATCH are integers, and a missing segment counts
+as 0, so \"0.1\" reads as 0.1.0.  PRE is nil for a release, or a
+list of pre-release identifiers, each an integer or a string.  The
+build metadata after a plus sign does not affect precedence, so it
+is dropped."
   (declare (pure t) (side-effect-free t))
   (when (and (stringp version)
              (string-match crate--version-re version))
     (list (string-to-number (match-string 1 version))
-          (string-to-number (match-string 2 version))
-          (string-to-number (match-string 3 version))
+          (string-to-number (or (match-string 2 version) "0"))
+          (string-to-number (or (match-string 3 version) "0"))
           (when-let* ((pre (match-string 4 version)))
             (mapcar (lambda (identifier)
                       (if (string-match-p "\\`[0-9]+\\'" identifier)
