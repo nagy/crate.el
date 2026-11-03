@@ -252,6 +252,23 @@ This enables the byte-compiler to optimize calls. Used on
 `crate-doc--module-tree`, `crate-browse--entry`, and
 `crate-browse--entry-less`.
 
+`pure` means the result depends on the arguments only, so a
+function that reads a variable (a defcustom, a buffer-local, a
+face) must not carry it.  Such a function gets `side-effect-free`
+alone: the compiler may drop a call whose value nothing uses, but
+must not fold the call:
+
+```elisp
+(defun crate-browse--entry (name data)
+  "Return a `tabulated-list' entry for crate NAME with DATA."
+  ;; reads `crate-annotation-width' and the faces
+  (declare (side-effect-free t))
+  ...)
+```
+
+A function that writes a hash table, a file, or a buffer has
+neither declaration (`crate--list`, `crate-browse--reload`).
+
 `crate-browse--entries` sorts entries by name with
 `crate-browse--entry-less` so the initial browse display is
 deterministic (hash iteration order is unspecified).

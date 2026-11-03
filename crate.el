@@ -397,6 +397,7 @@ where children have the same structure.  KIND is a symbol:
 `module', `struct', `trait', `function', `macro', `enum', etc.
 DOC is the first sentence of the item's docstring, or nil.
 Non-module items have nil as children."
+  (declare (pure t) (side-effect-free t))
   (when-let* ((root-id (gethash "root" json))
               (index (gethash "index" json))
               (root-num (if (integerp root-id) root-id
@@ -449,6 +450,7 @@ Non-module items have nil as children."
   "Return the description of the current crate.
 Collapses newlines and truncates to `fill-column'.  Returns an
 empty string when the description is missing or :null."
+  (declare (side-effect-free t))
   (or (when-let* ((it (gethash "description" crate-data))
                   ((not (eq it :null))))
         (setq it (string-replace "\n" "" it))
@@ -507,6 +509,7 @@ A reverse lookup on the `dependencies' table.  Memoized like
 
 (defun crate--format-downloads (n)
   "Format N as a human-readable download count."
+  (declare (pure t) (side-effect-free t))
   (cond
    ((>= n 1000000000) (format "%.1fB" (/ n 1000000000.0)))
    ((>= n 1000000) (format "%.1fM" (/ n 1000000.0)))
@@ -602,6 +605,7 @@ Used as a `thing-at-point-provider-alist' entry for `crate-mode'
 so `thing-at-point \\='url' (and `browse-url-at-point') treat a
 dependency crate name as a link to its crates.io page.  Returns nil
 unless point is on text carrying a `crate-url' property."
+  (declare (side-effect-free t))
   (get-text-property (point) 'crate-url))
 
 (defvar-keymap crate-mode-map
@@ -1234,6 +1238,7 @@ stays.  `crate-browse-mode' adds this function to
 
 (defun crate-browse--column-widths ()
   "Return the current width of every column of the table."
+  (declare (side-effect-free t))
   (mapcar (lambda (column) (nth 1 column))
           (append tabulated-list-format nil)))
 
@@ -1241,6 +1246,7 @@ stays.  `crate-browse-mode' adds this function to
   "Return a copy of FORMAT with the widths of WIDTHS.
 `tabulated-list-format' may share constant lists across buffers, so
 copy a column before it changes."
+  (declare (pure t) (side-effect-free t))
   (apply #'vector
          (cl-mapcar (lambda (column width)
                       (let ((copy (copy-sequence column)))
@@ -1252,6 +1258,7 @@ copy a column before it changes."
 (defun crate-browse--longest-cell (entries column)
   "Return the width of the widest COLUMN cell of ENTRIES.
 ENTRIES has the shape of `tabulated-list-entries'."
+  (declare (pure t) (side-effect-free t))
   (let ((longest 0))
     (dolist (entry entries longest)
       (setq longest
@@ -1264,6 +1271,7 @@ ENTRIES has the shape of `tabulated-list-entries'."
 The column grows to the longest visible version, capped by
 `crate-browse-version-max-width'.  The header label is the floor,
 so the label never truncates."
+  (declare (side-effect-free t))
   (let* ((widths (append (or crate-browse--declared-widths
                              (crate-browse--column-widths))
                          nil))
@@ -1276,6 +1284,7 @@ so the label never truncates."
 
 (defun crate-browse--base-widths ()
   "Return the widths that a window fit starts from."
+  (declare (side-effect-free t))
   (crate-browse--content-widths tabulated-list-entries))
 
 (defun crate-browse--fit-widths (widths budget)
@@ -1285,6 +1294,7 @@ remaining space, so `crate-browse-description-min-width' bounds its
 share.  A column before the last shrinks to 8, and the Crate column
 stops at `crate-browse-name-min-width'.  The result keeps every
 value when the columns already fit."
+  (declare (side-effect-free t))
   (let* ((last (1- (length widths)))
          (fitted (append widths nil))
          (fixed (let ((total tabulated-list-padding))
@@ -1312,6 +1322,7 @@ value when the columns already fit."
 The fit starts from `crate-browse--canonical-widths', so a resize
 in either direction reaches the right widths.  Return nil when the
 current widths already equal the fitted ones."
+  (declare (side-effect-free t))
   (when (and (windowp window) crate-browse--canonical-widths)
     (let* ((current (crate-browse--column-widths))
            (target (crate-browse--fit-widths crate-browse--canonical-widths
@@ -1343,6 +1354,7 @@ base widths, so the Version column follows the visible rows."
 
 (defun crate-browse--refit-p ()
   "Return non-nil when the current table may refit after a resize."
+  (declare (side-effect-free t))
   (or (null crate-browse-refit-max-entries)
       (not (listp tabulated-list-entries))
       (<= (length tabulated-list-entries) crate-browse-refit-max-entries)))
@@ -1445,6 +1457,7 @@ without an entry adds no row."
   "Return table CELL as plain text on one line.
 A cell holds a string or a cons of a label and button properties.
 The face of a cell goes away with the properties."
+  (declare (pure t) (side-effect-free t))
   (string-trim
    (replace-regexp-in-string
     "[ \t\n\r]+" " "
@@ -1455,6 +1468,7 @@ The face of a cell goes away with the properties."
 ROWS comes from `crate-browse--rows'.  The header names the columns
 of `tabulated-list-format'.  A pipe inside a cell is escaped, so
 the table keeps its shape."
+  (declare (side-effect-free t))
   (let* ((labels (mapcar (lambda (column) (car column))
                          (append tabulated-list-format nil)))
          (line (lambda (cells)
@@ -1481,6 +1495,7 @@ the table keeps its shape."
   "Return ROWS as `Cargo.toml' dependency lines.
 The lines read the Version cell of each row, so the export follows
 the visible data."
+  (declare (pure t) (side-effect-free t))
   (if (null rows)
       ""
     (concat (mapconcat (lambda (row)
