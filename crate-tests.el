@@ -798,6 +798,128 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (should (eq (nth 2 (aref tabulated-list-format 1))
                 'crate-browse--version-lessp))))
 
+(ert-deftest crate-browse-column-widths ()
+  "`crate-browse--column-widths' reports one width per column."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (should (equal (crate-browse--column-widths) '(40 12 0)))))
+
+(ert-deftest crate-browse-format-widths-copies ()
+  "`crate-browse--format-widths' sets widths without mutating FORMAT."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (let* ((original (copy-tree tabulated-list-format t))
+           (widths (crate-browse--format-widths original '(30 9 0))))
+      (should (equal (mapcar (lambda (column) (nth 1 column))
+                             (append widths nil))
+                     '(30 9 0)))
+      ;; The source format keeps its widths.
+      (should (equal (mapcar (lambda (column) (nth 1 column))
+                             (append original nil))
+                     '(40 12 0)))
+      ;; Column names survive the copy.
+      (should (equal (car (aref widths 0)) "Crate")))))
+
+(ert-deftest crate-browse-fit-widths-keeps-wide-columns ()
+  "A budget that already fits leaves the widths alone."
+  (should (equal (crate-browse--fit-widths '(40 12 0) 200) '(40 12 0))))
+
+(ert-deftest crate-browse-fit-widths-shrinks ()
+  "A narrow budget shrinks the Version column, then the Crate column."
+  ;; Version stops at 8, Crate stops at `crate-browse-name-min-width'.
+  (should (equal (crate-browse--fit-widths '(40 12 0) 170) '(40 12 0)))
+  (should (equal (crate-browse--fit-widths '(40 12 0) 60) '(20 8 0)))
+  ;; The last column is never touched: it takes the remaining space.
+  (should (= (nth 2 (crate-browse--fit-widths '(40 12 0) 40)) 0)))
+
+(ert-deftest crate-browse-content-widths-version-follows-entries ()
+  "The Version column grows to the longest visible version."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (let ((entries (list (list "a" (vector "a" "1.0.2280" ""))
+                         (list "b" (vector "b" "0.1.0" "")))))
+      (should (equal (nth 1 (crate-browse--content-widths entries)) 8)))
+    (let ((entries (list (list "a" (vector "a" "1.2.3-alpha.11" "")))))
+      (should (equal (nth 1 (crate-browse--content-widths entries)) 14)))
+    ;; A bogus long version cannot eat the row.
+    (let ((entries (list (list "a" (vector "a" (make-string 60 ?1) "")))))
+      (should (equal (nth 1 (crate-browse--content-widths entries))
+                     crate-browse-version-max-width)))
+    ;; The header label is the floor, so it never truncates.
+    (should (equal (nth 1 (crate-browse--content-widths nil))
+                   (string-width "Version")))))
+
+(ert-deftest crate-browse-fit-format-fits-selected-window ()
+  "`crate-browse--fit-format' records base widths and fits the format."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "a" (vector "a" "1.0.0" ""))))
+    (crate-browse--fit-format)
+    (should (equal crate-browse--canonical-widths
+                   (crate-browse--content-widths tabulated-list-entries)))
+    (should (<= (+ (nth 0 (crate-browse--column-widths))
+                   (nth 1 (crate-browse--column-widths))
+                   tabulated-list-padding 2)
+                (window-width (selected-window))))
+    ;; A second fit finds nothing to change.
+    (should-not (crate-browse--fit (selected-window)))))
+
+(ert-deftest crate-browse-resize-column-needs-a-row ()
+  "A column resize refuses a line without an entry."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (let ((inhibit-read-only t))
+      (insert "no entry here\n"))
+    (goto-char (point-min))
+    (should-error (crate-browse--resize-column 1) :type 'user-error)))
+
+(ert-deftest crate-browse-resize-column-widens-and-narrows ()
+  "`crate-browse-widen-column' and `crate-browse-narrow-column' resize."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (crate-browse-widen-column 5)
+    (should (equal (nth 1 (aref tabulated-list-format 0)) 45))
+    (crate-browse-narrow-column 5)
+    (should (equal (nth 1 (aref tabulated-list-format 0)) 40))
+    (should (eq (lookup-key crate-browse-mode-map "}")
+                #'crate-browse-widen-column))
+    (should (eq (lookup-key crate-browse-mode-map "{")
+                #'crate-browse-narrow-column))))
+
+(ert-deftest crate-browse-refit-timer-per-buffer ()
+  "A size change schedules one refit per buffer, and a kill cancels it."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (let ((buffer (current-buffer)))
+      (unwind-protect
+          (progn
+            (crate-browse--schedule-refit buffer (selected-window))
+            (should (timerp crate-browse--fit-timer))
+            (let ((first crate-browse--fit-timer))
+              ;; A second request reuses the pending timer.
+              (crate-browse--schedule-refit buffer (selected-window))
+              (should (eq first crate-browse--fit-timer)))
+            (crate-browse--cancel-fit)
+            (should-not crate-browse--fit-timer))
+        (crate-browse--cancel-fit)))))
+
+(ert-deftest crate-browse-window-size-change-skips-other-buffers ()
+  "The frame hook ignores a window whose buffer is no crate table."
+  (with-temp-buffer
+    (fundamental-mode)
+    (let ((buffer (current-buffer)))
+      (cl-letf (((symbol-function 'window-list)
+                 (lambda (&rest _) (list (selected-window))))
+                ((symbol-function 'window-buffer)
+                 (lambda (&optional _) buffer)))
+        (crate-browse--window-size-changed (selected-frame))
+        (should-not (buffer-local-value 'crate-browse--fit-timer buffer))))))
+
 ;;; End-to-end tests with test data
 
 (defvar crate-test--data-file "@testCratesDb@"

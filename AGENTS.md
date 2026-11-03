@@ -405,6 +405,32 @@ to `string<' on garbage, and sorts an empty version last.
 `crate-browse--cell-text' is the one reader of a cell that may be
 a string or a `(LABEL . PROPS)' cons.
 
+**A table fits its columns to its window.**
+`crate-browse--fit-widths' shrinks a middle column to 8 and then
+the Crate column to `crate-browse-name-min-width', so the last
+column keeps `crate-browse-description-min-width'.
+`crate-browse-mode' stores the widths it declares in
+`crate-browse--declared-widths'; `crate-browse--fit-format` builds
+the base widths from them and records `crate-browse--canonical-widths',
+and every later fit starts there, so a resize in either direction
+lands right.  The browse command fits before its first print,
+because that print lands in the selected window.  A frame resize
+schedules one refit per buffer through `run-at-time' (redisplay
+runs `window-size-change-functions'), and the refit reprints only
+when a width changed.  `tabulated-list-format' is buffer-local, so
+one width serves every window, and a manual resize lasts until the
+next frame resize.
+
+The Version column widens to the longest visible version through
+`crate-browse--content-widths', capped by
+`crate-browse-version-max-width'.  It reads
+`crate-browse--declared-widths', never a fitted or bookmarked
+value, so no feedback loop exists.
+
+`{` and `}` go through `crate-browse--resize-column', which refuses
+a line without an entry: `tabulated-list-widen-current-column'
+signals there.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via
