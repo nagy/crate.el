@@ -1317,12 +1317,13 @@ current widths already equal the fitted ones."
         (crate-browse--format-widths tabulated-list-format target)))))
 
 (defun crate-browse--fit-format ()
-  "Fit the columns to the selected window, without a reprint.
+  "Fit the columns to the window that shows this buffer, without a reprint.
 The browse command runs this before its first print, because that
 print lands in the selected window.  The fit also refreshes the
 base widths, so the Version column follows the visible rows."
   (setq-local crate-browse--canonical-widths (crate-browse--base-widths))
-  (when-let* ((fitted (crate-browse--fit (selected-window))))
+  (when-let* ((fitted (crate-browse--fit (or (get-buffer-window nil t)
+                                             (selected-window)))))
     (setq tabulated-list-format fitted)
     (tabulated-list-init-header)))
 
@@ -1524,9 +1525,11 @@ The export follows the current sort and the filter."
   "Rebuild `tabulated-list-entries' from the buffer-local filter.
 The `tabulated-list-revert-hook' of a browse buffer calls this, so
 `revert-buffer' (`g') keeps the filter.  `crate-browse-crates'
-calls it before the first print."
+calls it before the first print.  The content widths follow the new
+entries, so a reload never leaves a stale Version column."
   (setq tabulated-list-entries
-        (crate-browse--entries crate-browse--name-list)))
+        (crate-browse--entries crate-browse--name-list))
+  (crate-browse--fit-format))
 
 (defun crate--filter-by-name (name-prefix)
   "Return a list of crate names from the live cache matching NAME-PREFIX.
@@ -1608,7 +1611,6 @@ coexist in separate buffers."
       (setq-local crate-browse--name-list name-list)
       (setq-local crate-browse--name-prefix name-prefix)
       (crate-browse--reload)
-      (crate-browse--fit-format)
       (tabulated-list-print))
     (switch-to-buffer buf)))
 

@@ -1429,6 +1429,30 @@ Substituted at build time by default.nix.")
         (should (assoc "neovim" tabulated-list-entries))
         (should-not (assoc "htop" tabulated-list-entries))))))
 
+(ert-deftest crate-browse-revert-refits-the-version-column ()
+  "A reload sizes the Version column to the new data."
+  (let ((table (crate-test--crate-table
+                '("htop" :name "htop" :latest_version "1.0.0"))))
+    (cl-letf (((symbol-function 'crate--list) (lambda () table)))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (crate-browse--reload)
+        (should (equal (nth 1 crate-browse--canonical-widths)
+                       (string-width "Version")))
+        ;; A longer version must widen the column on the next reload.
+        (setq table (crate-test--crate-table
+                     '("htop" :name "htop"
+                             :latest_version "1.0.0-alpha.1234567890")))
+        (revert-buffer nil t)
+        (should (equal (nth 1 crate-browse--canonical-widths)
+                       (string-width "1.0.0-alpha.1234567890")))
+        ;; The printed widths come from the new base, squeezed to the
+        ;; window that shows the table.
+        (should (equal (crate-browse--column-widths)
+                       (crate-browse--fit-widths
+                        crate-browse--canonical-widths
+                        (window-width (selected-window)))))))))
+
 (ert-deftest crate-browse-search-url-opens-crates-io ()
   "`crate-browse-search-url' opens the entry on crates.io."
   (let ((opened nil))

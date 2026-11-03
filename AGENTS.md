@@ -393,7 +393,10 @@ buffer-local `crate-browse--name-list', and `crate-browse-mode'
 adds it to `tabulated-list-revert-hook' buffer-locally, so `g'
 (`revert-buffer') keeps the filter.  No `revert-buffer-function'
 override and no refresh defun exist.  `crate-browse-crates' calls
-`crate-browse--reload' before its first print.
+`crate-browse--reload' before its first print.  It then refits the
+columns (`crate-browse--fit-format'), so the content widths follow
+the new data instead of staying stale.  The fit picks the window
+that shows the buffer, and the selected window when none does.
 
 **A column SORT element may be a predicate** over entries, and the
 Version column uses `crate-browse--version-lessp'.  The built-in
