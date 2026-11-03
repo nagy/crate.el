@@ -938,8 +938,6 @@ and delegates to `find-crate'."
   "<follow-link>" #'crate-browse--click-selects-row
   "b"   #'crate-browse-search-url
   "w"   #'crate-copy-dependency
-  "{"   #'crate-browse-narrow-column
-  "}"   #'crate-browse-widen-column
   "e"   crate-browse-export-map)
 
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
@@ -1358,25 +1356,6 @@ other columns give way when the window is too narrow."
 
 (add-hook 'window-size-change-functions #'crate-browse--window-size-changed)
 
-(defun crate-browse--resize-column (n)
-  "Widen the column under point by N, or narrow it when N is negative.
-`tabulated-list-widen-current-column' reads the entry at point, so
-it signals on a line without one.  This wrapper reports that case
-as a user error."
-  (interactive "p")
-  (unless (tabulated-list-get-entry)
-    (user-error "Put point on a row to resize a column"))
-  (tabulated-list-widen-current-column n))
-
-(defun crate-browse-narrow-column (n)
-  "Narrow the column under point by N."
-  (interactive "p")
-  (crate-browse--resize-column (- n)))
-
-(defun crate-browse-widen-column (n)
-  "Widen the column under point by N."
-  (interactive "p")
-  (crate-browse--resize-column n))
 
 (defun crate-browse-visit ()
   "Display details for the crate at point."

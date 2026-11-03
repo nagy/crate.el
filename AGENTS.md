@@ -428,9 +428,10 @@ The Version column widens to the longest visible version through
 `crate-browse--declared-widths', never a fitted or bookmarked
 value, so no feedback loop exists.
 
-`{` and `}` go through `crate-browse--resize-column', which refuses
-a line without an entry: `tabulated-list-widen-current-column'
-signals there.
+**`{` and `}` come from `tabulated-list-mode-map`** (bound to
+`tabulated-list-narrow-current-column` and
+`tabulated-list-widen-current-column`).  crate.el declares no resize
+command of its own: a wrapper here would only repeat them.
 
 **`crate-display-buffer-action' picks the window of a detail
 buffer.**  nil keeps `switch-to-buffer' (the original behavior and

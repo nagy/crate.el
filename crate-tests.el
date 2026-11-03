@@ -910,31 +910,22 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     ;; A second fit finds nothing to change.
     (should-not (crate-browse--fit (selected-window)))))
 
-(ert-deftest crate-browse-resize-column-needs-a-row ()
-  "A column resize refuses a line without an entry."
-  (with-temp-buffer
-    (crate-browse-mode)
-    (let ((inhibit-read-only t))
-      (insert "no entry here\n"))
-    (goto-char (point-min))
-    (should-error (crate-browse--resize-column 1) :type 'user-error)))
-
-(ert-deftest crate-browse-resize-column-widens-and-narrows ()
-  "`crate-browse-widen-column' and `crate-browse-narrow-column' resize."
+(ert-deftest crate-browse-column-resize-comes-from-tabulated-list ()
+  "The `{' and `}' resize keys stay with `tabulated-list-mode-map'."
   (with-temp-buffer
     (crate-browse-mode)
     (setq tabulated-list-entries
           (list (list "serde" (vector "serde" "1.0.0" "framework"))))
     (tabulated-list-print)
     (goto-char (point-min))
-    (crate-browse-widen-column 5)
-    (should (equal (nth 1 (aref tabulated-list-format 0)) 45))
-    (crate-browse-narrow-column 5)
-    (should (equal (nth 1 (aref tabulated-list-format 0)) 40))
     (should (eq (lookup-key crate-browse-mode-map "}")
-                #'crate-browse-widen-column))
+                #'tabulated-list-widen-current-column))
     (should (eq (lookup-key crate-browse-mode-map "{")
-                #'crate-browse-narrow-column))))
+                #'tabulated-list-narrow-current-column))
+    (tabulated-list-widen-current-column 5)
+    (should (equal (nth 1 (aref tabulated-list-format 0)) 45))
+    (tabulated-list-narrow-current-column 5)
+    (should (equal (nth 1 (aref tabulated-list-format 0)) 40))))
 
 (ert-deftest crate-browse-refit-timer-per-buffer ()
   "A size change schedules one refit per buffer, and a kill cancels it."
