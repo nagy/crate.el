@@ -926,6 +926,7 @@ and delegates to `find-crate'."
   "RET" #'crate-browse-visit
   "o"   #'crate-browse-open-other-window
   "<mouse-2>" #'crate-browse-open-other-window-mouse
+  "<follow-link>" #'crate-browse--click-selects-row
   "b"   #'crate-browse-search-url
   "w"   #'crate-copy-dependency
   "{"   #'crate-browse-narrow-column
@@ -957,6 +958,9 @@ The table shrinks its columns when the window is narrow."
   (hl-line-mode 1)
   (add-hook 'tabulated-list-revert-hook #'crate-browse--reload nil t)
   (add-hook 'kill-buffer-hook #'crate-browse--cancel-fit nil t)
+  (setq-local tabulated-list-printer #'crate-browse--print-entry)
+  (when (boundp 'context-menu-functions)
+    (add-hook 'context-menu-functions #'crate-browse--context-menu nil t))
   (setq-local bookmark-make-record-function
               #'crate-browse--bookmark-make-record))
 
@@ -1116,6 +1120,87 @@ initial display is deterministic (hash iteration order is not)."
   "Return the crate name at point, or signal an error."
   (or (tabulated-list-get-id)
       (user-error "No crate on this line")))
+
+;;; Mouse and context menu
+
+(defconst crate-browse--mouse-help
+  "mouse-2: open in another window, mouse-3: menu"
+  "Help text that every browse table row carries.")
+
+(defun crate-browse--print-entry (id columns)
+  "Print one table row for ID and COLUMNS, then add its mouse help.
+`tabulated-list-print' calls this through `tabulated-list-printer'
+for every entry, so a line without an entry stays plain.  The whole
+row explains the mouse, and the name cell carries `mouse-face', so
+the pointer highlights the name alone."
+  (let ((beg (point)))
+    (tabulated-list-print-entry id columns)
+    (when id
+      (let* ((end (1- (point)))
+             (text (crate-browse--cell-text (aref columns 0)))
+             (name-start (+ beg tabulated-list-padding))
+             (name-end (min (+ name-start (string-width text)) end)))
+        (add-text-properties beg end (list 'help-echo crate-browse--mouse-help))
+        (when (< name-start name-end)
+          (add-text-properties name-start name-end
+                               '(mouse-face highlight)))))))
+
+(defun crate-browse--click-selects-row (&rest _ignored)
+  "Return nil, so one click selects a row and follows no link.
+`tabulated-list-mode-map' binds `follow-link' to `mouse-face', and
+that value turns a click on a marked cell into a `mouse-2' event.
+The name cell carries `mouse-face', so this predicate keeps the
+click from opening a detail buffer.  The middle button opens one."
+  nil)
+
+(defun crate-browse--context-command (position buffer function)
+  "Return a command that moves point to POSITION in BUFFER, then calls FUNCTION.
+A context menu click leaves point alone, and the menu command can
+run in another buffer, so the command restores both first."
+  (lambda ()
+    (interactive)
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (integer-or-marker-p position)
+          (goto-char (min position (point-max))))
+        (funcall function)))))
+
+(defun crate-browse--context-menu (menu click)
+  "Fill MENU with the table commands for the row under CLICK.
+A click below the last row adds nothing, so the plain Emacs menu
+stays.  `crate-browse-mode' adds this function to
+`context-menu-functions' buffer-locally."
+  (let* ((position (posn-point (event-start click)))
+         (buffer (current-buffer))
+         (name (crate-browse--name-at-event click)))
+    (when (and name (derived-mode-p 'crate-browse-mode))
+      (let ((command (lambda (function)
+                       (crate-browse--context-command position buffer
+                                                     function))))
+        (define-key-after menu [crate-browse-open]
+          (list 'menu-item "Open Details"
+                (funcall command
+                         (lambda ()
+                           (crate-browse--display name nil)))))
+        (define-key-after menu [crate-browse-open-other-window]
+          (list 'menu-item "Open in Other Window"
+                (funcall command
+                         (lambda ()
+                           (crate-browse--display
+                            name crate--other-window-action)))))
+        (define-key-after menu [crate-browse-copy-dependency]
+          (list 'menu-item "Copy Dependency Line"
+                (funcall command (lambda () (crate-copy-dependency name)))))
+        (define-key-after menu [crate-browse-search-url]
+          (list 'menu-item "Open on crates.io"
+                (funcall command
+                         (lambda ()
+                           (browse-url (concat crate--crates-io-url name))))))
+        (define-key-after menu [crate-browse-refresh-separator]
+          menu-bar-separator)
+        (define-key-after menu [crate-browse-revert]
+          '(menu-item "Refresh" revert-buffer))))
+    menu))
 
 ;;; Column widths
 

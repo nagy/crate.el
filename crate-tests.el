@@ -1024,6 +1024,84 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
   (should (eq (lookup-key crate-browse-mode-map [mouse-2])
               #'crate-browse-open-other-window-mouse)))
 
+(ert-deftest crate-browse-print-entry-adds-mouse-help ()
+  "A printed row explains the mouse and highlights the name cell."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (should (equal (get-text-property (point) 'help-echo)
+                   crate-browse--mouse-help))
+    (should (eq (get-text-property (+ (point) tabulated-list-padding)
+                                   'mouse-face)
+                'highlight))
+    ;; The Version cell carries no mouse face.
+    (should-not (get-text-property (+ (point) tabulated-list-padding 44)
+                                   'mouse-face))))
+
+(ert-deftest crate-browse-click-selects-row ()
+  "One click selects a row instead of following a link."
+  (should-not (crate-browse--click-selects-row (list 'mouse-1 nil)))
+  (should (eq (lookup-key crate-browse-mode-map [follow-link])
+              #'crate-browse--click-selects-row)))
+
+(ert-deftest crate-browse-context-menu-lists-row-commands ()
+  "A click on a row adds the table commands to the menu."
+  (let ((buffer (get-buffer-create "*Crates menu*"))
+        (menu (make-sparse-keymap)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (crate-browse-mode)
+          (setq tabulated-list-entries
+                (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+          (tabulated-list-print)
+          (set-window-buffer (selected-window) buffer)
+          (crate-browse--context-menu
+           menu (list 'mouse-3 (list (selected-window) (point-min) '(0 . 0) 0))))
+      (kill-buffer buffer))
+    (should (lookup-key menu [crate-browse-open]))
+    (should (lookup-key menu [crate-browse-open-other-window]))
+    (should (lookup-key menu [crate-browse-copy-dependency]))
+    (should (lookup-key menu [crate-browse-search-url]))
+    (should (lookup-key menu [crate-browse-revert]))))
+
+(ert-deftest crate-browse-context-menu-empty-below-rows ()
+  "A click outside the rows leaves the menu to Emacs."
+  (let ((buffer (get-buffer-create "*Crates menu empty*"))
+        (menu (make-sparse-keymap)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (crate-browse-mode)
+          (setq tabulated-list-entries
+                (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+          (tabulated-list-print)
+          (set-window-buffer (selected-window) buffer)
+          (crate-browse--context-menu
+           menu (list 'mouse-3 (list (selected-window) (point-max) '(0 . 0) 0))))
+      (kill-buffer buffer))
+    (should-not (lookup-key menu [crate-browse-open]))))
+
+(ert-deftest crate-browse-context-command-restores-buffer-and-point ()
+  "A menu command lands in the clicked buffer, on the clicked row."
+  (let ((buffer (get-buffer-create "*Crates ctx*"))
+        (seen nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (crate-browse-mode)
+            (let ((inhibit-read-only t))
+              (insert "one\ntwo\nthree\n")))
+          (let ((command (crate-browse--context-command
+                          7 buffer (lambda () (setq seen (buffer-string))))))
+            (with-temp-buffer
+              (funcall command)))
+          (should (equal seen "one\ntwo\nthree\n"))
+          (with-current-buffer buffer
+            (should (= (point) 7))))
+      (kill-buffer buffer))))
+
 ;;; End-to-end tests with test data
 
 (defvar crate-test--data-file "@testCratesDb@"

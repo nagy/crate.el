@@ -441,6 +441,18 @@ already shows the buffer, else splits, and never uses the selected
 window.  Emacs has no `display-buffer-other-window' function, so do
 not reach for it.
 
+**`tabulated-list-printer' is `crate-browse--print-entry`.**  It
+paints `help-echo` on the whole row and `mouse-face` on the name
+cell alone, so the pointer highlights one cell.  `<follow-link>` is
+`crate-browse--click-selects-row`, which returns nil: with the
+`tabulated-list-mode-map` default (`mouse-face`) a click on the
+highlighted name would turn into a `mouse-2` event and open a
+detail buffer.  `context-menu-functions` carries
+`crate-browse--context-menu` buffer-locally, guarded by `boundp`.
+A menu click leaves point alone, so each menu command wraps
+`crate-browse--context-command`, which restores the buffer and
+moves point before the command runs.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via
