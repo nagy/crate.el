@@ -522,6 +522,11 @@ against it in the `when-let*` binding, not in the body:
   `(NAME (prop . val) ...)` — `bookmark-prop-get` returns nil on
   bare alists (no name-string car), matching what
   `bookmark-handle-bookmark` really passes to handlers.
+- Do not `cl-letf` a `defsubst` such as `tabulated-list-get-id`:
+  byte-compiled callers carry their own copy of the call, so the
+  mock works from source and silently fails in the Nix build.  Fill
+  `tabulated-list-entries`, call `tabulated-list-print`, and move
+  point instead.
 - Tests that need `browse-url-default-handlers` must `(require
   'browse-url)` first — `crate-install-browse-url-handler` uses
   `with-eval-after-load`, which is a no-op if browse-url isn't loaded.

@@ -1002,22 +1002,21 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (should (equal action crate--other-window-action))))
 
 (ert-deftest crate-browse-open-other-window-passes-action ()
-  "`crate-browse-open-other-window' binds the action for one call."
+  "`crate-browse-open-other-window' binds the action for one call.
+Do not mock `tabulated-list-get-id' here: it is a defsubst, so the
+byte-compiled command carries its own copy of the call."
   (let ((crate-display-buffer-action nil)
-        (crate--data-cache (make-hash-table :test 'equal))
-        (crate-doc-enable nil)
         (seen-name nil) (seen-action :unset))
-    (puthash (list 'data crate-data-path)
-             (crate-test--crate-table
-              '("serde" :name "serde" :latest_version "1.0.0"))
-             crate--data-cache)
     (cl-letf (((symbol-function 'find-crate)
                (lambda (name)
                  (setq seen-name name
-                       seen-action crate-display-buffer-action)))
-              ((symbol-function 'tabulated-list-get-id) (lambda () "serde")))
+                       seen-action crate-display-buffer-action))))
       (with-temp-buffer
         (crate-browse-mode)
+        (setq tabulated-list-entries
+              (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+        (tabulated-list-print)
+        (goto-char (point-min))
         (crate-browse-open-other-window)))
     (should (equal seen-name "serde"))
     (should (equal seen-action crate--other-window-action))
