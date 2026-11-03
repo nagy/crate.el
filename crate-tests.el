@@ -884,18 +884,18 @@ Substituted at build time by default.nix.")
             (should (string-match-p "dev" content))
             (should (string-match-p "(optional)" content))))))))
 
-(ert-deftest crate-browse-refresh-picks-up-new-data ()
-  "`crate-browse-refresh' re-derives entries from the live cache."
+(ert-deftest crate-browse-revert-picks-up-new-data ()
+  "`revert-buffer' re-derives entries from the live cache."
   (let ((table (crate-test--crate-table '("htop" :name "htop" :description "viewer"))))
     (cl-letf (((symbol-function 'crate--list) (lambda () table)))
       (with-temp-buffer
         (crate-browse-mode)
-        (crate-browse-refresh)
+        (crate-browse--reload)
         (should (assoc "htop" tabulated-list-entries))
-        ;; Cache swapped (e.g. new database) — refresh must pick it up.
+        ;; Cache swapped (e.g. new database) — a revert must pick it up.
         (setq table (crate-test--crate-table
                      '("neovim" :name "neovim" :description "editor")))
-        (crate-browse-refresh)
+        (revert-buffer nil t)
         (should (assoc "neovim" tabulated-list-entries))
         (should-not (assoc "htop" tabulated-list-entries))))))
 

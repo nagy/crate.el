@@ -884,8 +884,7 @@ and delegates to `find-crate'."
   :parent tabulated-list-mode-map
   "RET" #'crate-browse-visit
   "b"   #'crate-browse-search-url
-  "w"   #'crate-copy-dependency
-  "g"   #'crate-browse-refresh)
+  "w"   #'crate-copy-dependency)
 
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
   "Major mode for browsing Rust crates in a sortable table.
@@ -894,7 +893,7 @@ and delegates to `find-crate'."
 \\<crate-browse-mode-map>
 \\[crate-browse-visit] on an entry to view full details,
 \\[crate-browse-search-url] to open on crates.io,
-\\[crate-browse-refresh] to reload the data."
+\\[revert-buffer] to reload the data."
   :interactive nil
   (setq tabulated-list-format
         [("Crate" 40 t) ("Version" 12 t) ("Description" 0 nil)])
@@ -902,6 +901,7 @@ and delegates to `find-crate'."
   (setq tabulated-list-sort-key '("Crate" . nil))
   (tabulated-list-init-header)
   (hl-line-mode 1)
+  (add-hook 'tabulated-list-revert-hook #'crate-browse--reload nil t)
   (setq-local bookmark-make-record-function
               #'crate-browse--bookmark-make-record))
 
@@ -972,12 +972,13 @@ initial display is deterministic (hash iteration order is not)."
   (browse-url (concat crate--crates-io-url
                       (crate-browse--current-name))))
 
-(defun crate-browse-refresh ()
-  "Refresh the crate browse table."
-  (interactive)
+(defun crate-browse--reload ()
+  "Rebuild `tabulated-list-entries' from the buffer-local filter.
+The `tabulated-list-revert-hook' of a browse buffer calls this, so
+`revert-buffer' (`g') keeps the filter.  `crate-browse-crates'
+calls it before the first print."
   (setq tabulated-list-entries
-        (crate-browse--entries crate-browse--name-list))
-  (tabulated-list-print t))
+        (crate-browse--entries crate-browse--name-list)))
 
 (defun crate--filter-by-name (name-prefix)
   "Return a list of crate names from the live cache matching NAME-PREFIX.
@@ -1029,8 +1030,7 @@ coexist in separate buffers."
       (crate-browse-mode)
       (setq-local crate-browse--name-list name-list)
       (setq-local crate-browse--name-prefix name-prefix)
-      (setq tabulated-list-entries
-            (crate-browse--entries name-list))
+      (crate-browse--reload)
       (tabulated-list-print))
     (switch-to-buffer buf)))
 

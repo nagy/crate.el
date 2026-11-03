@@ -385,6 +385,15 @@ the variable void and `setq-local` signals in a bare Emacs.  The
 provider only uses text properties at point, so it returns nil on
 any non-button text.
 
+### Browse table reload
+
+`crate-browse--reload' rebuilds `tabulated-list-entries' from the
+buffer-local `crate-browse--name-list', and `crate-browse-mode'
+adds it to `tabulated-list-revert-hook' buffer-locally, so `g'
+(`revert-buffer') keeps the filter.  No `revert-buffer-function'
+override and no refresh defun exist.  `crate-browse-crates' calls
+`crate-browse--reload' before its first print.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via
