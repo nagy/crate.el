@@ -12,6 +12,14 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 
 - =M-x find-crate= with completion, Marginalia annotations, and Embark actions
 - =M-x crate-browse-crates= tabulated list view with sorting and bookmarks
+- The Version column sorts as semver (=1.9.0= before =1.10.0=, a
+  pre-release before its release), the columns fit the window, and
+  ={=/=}= resize one by hand
+- Mouse support: the middle button opens a crate in another window,
+  =mouse-3= opens a menu, one click only selects a row
+- Export the visible rows as =Cargo.toml= dependency lines (=e c=)
+  or as a Markdown table (=e m=)
+- A table bookmark keeps the sort key and the column widths
 - Redirect crates.io URLs to =find-crate= via =browse-url= handler
 - Org link type: =crate:=
 - Module tree display from rustdoc JSON (optional, requires Nix)
@@ -27,6 +35,24 @@ To enable the browse URL handler:
 #+begin_src elisp
   (crate-install-browse-url-handler)
 #+end_src
+
+* Browse table
+
+=M-x crate-browse-crates= opens the table.  =RET= opens the crate at
+point, =o= and =mouse-2= open it in another window, =w= copies a
+=Cargo.toml= dependency line, =b= opens crates.io, and =g= reloads the
+table.  Click a column header to sort by it, and click again to
+reverse the order.
+
+The =e= prefix exports the visible rows: =e c= writes
+=NAME = "VERSION"= lines for a =[dependencies]= section, and =e m=
+writes a Markdown table.  An export follows the current sort and
+the filter.
+
+A narrow window shrinks the columns instead of pushing the
+description off the screen.  Set =crate-display-buffer-action= to
+=crate--other-window-action= to open every crate beside the buffer
+that you started from.
 
 * License
 
