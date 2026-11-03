@@ -896,7 +896,9 @@ and delegates to `find-crate'."
 \\[revert-buffer] to reload the data."
   :interactive nil
   (setq tabulated-list-format
-        [("Crate" 40 t) ("Version" 12 t) ("Description" 0 nil)])
+        [("Crate" 40 t)
+         ("Version" 12 crate-browse--version-lessp)
+         ("Description" 0 nil)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key '("Crate" . nil))
   (tabulated-list-init-header)
@@ -913,6 +915,93 @@ When nil, all crates are shown.")
 (defvar-local crate-browse--name-prefix nil
   "Buffer-local search term used for naming the browse buffer.")
 (put 'crate-browse--name-prefix 'permanent-local t)
+
+(defconst crate--version-re
+  "\\`\\([0-9]+\\)\\.\\([0-9]+\\)\\.\\([0-9]+\\)\\(?:-\\([^+]+\\)\\)?\\(?:\\+.*\\)?\\'"
+  "Regexp splitting a semver string into its numeric and pre-release parts.")
+
+(defun crate--version-parts (version)
+  "Return VERSION as (MAJOR MINOR PATCH PRE), or nil if it is no semver.
+MAJOR, MINOR and PATCH are integers.  PRE is nil for a release, or
+a list of pre-release identifiers, each an integer or a string.
+The build metadata after a plus sign does not affect precedence,
+so it is dropped."
+  (declare (pure t) (side-effect-free t))
+  (when (and (stringp version)
+             (string-match crate--version-re version))
+    (list (string-to-number (match-string 1 version))
+          (string-to-number (match-string 2 version))
+          (string-to-number (match-string 3 version))
+          (when-let* ((pre (match-string 4 version)))
+            (mapcar (lambda (identifier)
+                      (if (string-match-p "\\`[0-9]+\\'" identifier)
+                          (string-to-number identifier)
+                        identifier))
+                    (split-string pre "\\."))))))
+
+(defun crate--semver-identifier-lessp (a b)
+  "Return non-nil when pre-release identifier A sorts before B.
+A numeric identifier sorts before an alphanumeric one, and two
+numeric identifiers compare as numbers."
+  (declare (pure t) (side-effect-free t))
+  (cond ((and (integerp a) (integerp b)) (< a b))
+        ((integerp a) t)
+        ((integerp b) nil)
+        (t (string< a b))))
+
+(defun crate--semver-pre-lessp (a b)
+  "Return non-nil when pre-release list A sorts before list B.
+A numeric identifier sorts before an alphanumeric one, and a list
+that prefixes a longer list sorts first, so \"alpha\" comes before
+\"alpha.1\"."
+  (declare (pure t) (side-effect-free t))
+  (cond ((null a) t)
+        ((null b) nil)
+        ((equal (car a) (car b))
+         (crate--semver-pre-lessp (cdr a) (cdr b)))
+        (t (crate--semver-identifier-lessp (car a) (car b)))))
+
+(defun crate--version-lessp (a b)
+  "Return non-nil when version string A sorts before version string B.
+Compare as semver, so \"1.9.0\" sorts before \"1.10.0\" and
+\"1.0.0-rc.1\" before \"1.0.0\".  `version<' rejects a pre-release,
+so it cannot do this job.  A value that is no semver falls back to
+`string<', and an empty value sorts last."
+  (declare (pure t) (side-effect-free t))
+  (let ((a-parts (crate--version-parts a))
+        (b-parts (crate--version-parts b)))
+    (cond ((and a-parts b-parts)
+           (let ((a-core (butlast a-parts))
+                 (b-core (butlast b-parts))
+                 (a-pre (nth 3 a-parts))
+                 (b-pre (nth 3 b-parts)))
+             (cond ((version-list-< a-core b-core) t)
+                   ((version-list-< b-core a-core) nil)
+                   ;; A release sorts after a pre-release of the
+                   ;; same core version.
+                   ((null a-pre) nil)
+                   ((null b-pre) t)
+                   (t (crate--semver-pre-lessp a-pre b-pre)))))
+          ((string-empty-p (or a "")) nil)
+          ((string-empty-p (or b "")) t)
+          (t (string< a b)))))
+
+(defun crate-browse--cell-text (cell)
+  "Return table CELL as a string.
+A cell holds a string or a cons of a label and button properties."
+  (declare (pure t) (side-effect-free t))
+  (cond ((stringp cell) cell)
+        ((consp cell) (format "%s" (car cell)))
+        (t "")))
+
+(defun crate-browse--version-lessp (a b)
+  "Return non-nil when `tabulated-list' entry A sorts before B.
+A and B are `tabulated-list-entries' entries.  The Version column
+compares semvers rather than the strings it prints, so \"1.9\"
+lands before \"1.10\".  An entry without a version sorts last."
+  (declare (side-effect-free t))
+  (crate--version-lessp (crate-browse--cell-text (aref (cadr a) 1))
+                        (crate-browse--cell-text (aref (cadr b) 1))))
 
 (defun crate-browse--entry (name data)
   "Return a `tabulated-list' entry for crate NAME with DATA."

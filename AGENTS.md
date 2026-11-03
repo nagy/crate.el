@@ -394,6 +394,17 @@ adds it to `tabulated-list-revert-hook' buffer-locally, so `g'
 override and no refresh defun exist.  `crate-browse-crates' calls
 `crate-browse--reload' before its first print.
 
+**A column SORT element may be a predicate** over entries, and the
+Version column uses `crate-browse--version-lessp'.  The built-in
+`t' sorts the cell strings, which puts "1.10.0" before "1.9.0".
+Do not swap in `version<': it signals "Invalid version syntax" on
+any pre-release ("1.0.0-rc.1"), and crates.io publishes those.
+`crate--version-lessp' parses semver itself (`crate--version-parts`
+plus `crate--semver-pre-lessp`), drops build metadata, falls back
+to `string<' on garbage, and sorts an empty version last.
+`crate-browse--cell-text' is the one reader of a cell that may be
+a string or a `(LABEL . PROPS)' cons.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via

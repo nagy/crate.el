@@ -728,6 +728,76 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
       (should-not called-prefix))))
 
 
+(ert-deftest crate--version-parts-parses-semver ()
+  "`crate--version-parts' splits a semver string into numbers."
+  (should (equal (crate--version-parts "1.2.3") '(1 2 3 nil)))
+  (should (equal (crate--version-parts "0.10.228") '(0 10 228 nil)))
+  (should (equal (crate--version-parts "1.0.0-rc.1") '(1 0 0 ("rc" 1))))
+  (should (equal (crate--version-parts "1.0.0-alpha.10")
+                 '(1 0 0 ("alpha" 10))))
+  ;; Build metadata does not affect precedence, so it is dropped.
+  (should (equal (crate--version-parts "1.0.0-rc.1+build.5")
+                 '(1 0 0 ("rc" 1))))
+  (should (equal (crate--version-parts "1.0.0+20130313144700")
+                 '(1 0 0 nil)))
+  (should-not (crate--version-parts "not a version"))
+  (should-not (crate--version-parts "1.0"))
+  (should-not (crate--version-parts nil)))
+
+(ert-deftest crate--version-lessp-numeric-segments ()
+  "Numeric segments compare as numbers, not as strings."
+  (should (crate--version-lessp "1.9.0" "1.10.0"))
+  (should-not (crate--version-lessp "1.10.0" "1.9.0"))
+  (should (crate--version-lessp "0.3.1" "0.10.2"))
+  (should (crate--version-lessp "1.0.228" "10.0.0")))
+
+(ert-deftest crate--version-lessp-pre-release ()
+  "A pre-release sorts before its release, per semver precedence."
+  (should (crate--version-lessp "1.0.0-rc.1" "1.0.0"))
+  (should-not (crate--version-lessp "1.0.0" "1.0.0-rc.1"))
+  (should (crate--version-lessp "1.0.0-alpha" "1.0.0-alpha.1"))
+  (should (crate--version-lessp "1.0.0-alpha.9" "1.0.0-alpha.10"))
+  ;; A numeric identifier sorts before an alphanumeric one.
+  (should (crate--version-lessp "1.0.0-2" "1.0.0-beta"))
+  (should (crate--version-lessp "1.0.0-alpha" "1.0.0-beta")))
+
+(ert-deftest crate--version-lessp-fallbacks ()
+  "An empty version sorts last and junk falls back to `string<'."
+  (should (crate--version-lessp "1.0.0" ""))
+  (should-not (crate--version-lessp "" "1.0.0"))
+  (should-not (crate--version-lessp "" ""))
+  (should (crate--version-lessp "aaa" "bbb")))
+
+(ert-deftest crate-browse-version-lessp-entries ()
+  "The Version column predicate reads the entry cells."
+  (let ((older (list "a" (vector "a" "1.9.0" "")))
+        (newer (list "b" (vector "b" "1.10.0" ""))))
+    (should (crate-browse--version-lessp older newer))
+    (should-not (crate-browse--version-lessp newer older))
+    ;; A missing version cell sorts last instead of signaling.
+    (should (crate-browse--version-lessp
+             older (list "c" (vector "c" nil ""))))))
+
+(ert-deftest crate-browse-sorts-by-version ()
+  "`tabulated-list-print' honors the semver sort predicate."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "c" (vector "c" "1.10.0" ""))
+                (list "a" (vector "a" "1.9.0" ""))
+                (list "b" (vector "b" "1.0.0-rc.1" ""))))
+    (setq tabulated-list-sort-key '("Version" . nil))
+    (tabulated-list-print)
+    (should (equal (mapcar #'car tabulated-list-entries)
+                   '("b" "a" "c")))))
+
+(ert-deftest crate-browse-version-column-sorts-by-semver ()
+  "The Version column descriptor names the semver predicate."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (should (eq (nth 2 (aref tabulated-list-format 1))
+                'crate-browse--version-lessp))))
+
 ;;; End-to-end tests with test data
 
 (defvar crate-test--data-file "@testCratesDb@"
