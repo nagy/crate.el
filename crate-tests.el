@@ -679,7 +679,52 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
       (should (string-match-p "serde" (car rec)))
       (should-not (alist-get 'name-list rec))
       (should (equal (alist-get 'name-prefix rec) "serde"))
+      ;; The table state travels too.
+      (should (equal (alist-get 'sort-key rec) '("Crate")))
+      (should (equal (alist-get 'widths rec) '(40 12 0)))
       (should (eq (alist-get 'handler rec) 'crate-browse--bookmark-jump)))))
+
+(ert-deftest crate-browse-restore-state-applies-sort-and-widths ()
+  "A jump restores the saved sort key and column widths."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries
+          (list (list "serde" (vector "serde" "1.0.0" "framework"))))
+    (crate-browse--restore-state
+     '("Crates: all"
+       (name-prefix)
+       (sort-key "Version" . t)
+       (widths 25 14 0)
+       (handler . crate-browse--bookmark-jump)))
+    (should (equal tabulated-list-sort-key '("Version" . t)))
+    (should (equal (crate-browse--column-widths) '(25 14 0)))
+    ;; The restored widths become the base of a later fit.
+    (should (equal crate-browse--canonical-widths '(25 14 0)))))
+
+(ert-deftest crate-browse-restore-state-ignores-bad-state ()
+  "A stale sort key or a width list of the wrong length is ignored."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (crate-browse--restore-state
+     '("Crates: all"
+       (sort-key "Gone")
+       (widths 25 14)))
+    (should (equal tabulated-list-sort-key '("Crate")))
+    (should (equal (crate-browse--column-widths) '(40 12 0)))
+    ;; The mode leaves the canonical widths at its declared ones.
+    (should (equal crate-browse--canonical-widths '(40 12 0))))
+  ;; A bookmark without the new fields still opens the table.
+  (with-temp-buffer
+    (crate-browse-mode)
+    (crate-browse--restore-state '("Crates: all" (name-prefix)))
+    (should (equal tabulated-list-sort-key '("Crate")))))
+
+(ert-deftest crate-browse-restore-state-skips-non-table-buffer ()
+  "A detail buffer ignores table state in a bookmark."
+  (with-temp-buffer
+    (fundamental-mode)
+    (should-not (crate-browse--restore-state
+                 '("Crates: all" (sort-key "Version"))))))
 
 (ert-deftest crate-browse-bookmark-make-record-no-prefix ()
   "Browse bookmark with nil name-prefix shows \"all\"."

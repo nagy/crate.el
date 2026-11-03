@@ -1551,7 +1551,35 @@ NAME-PREFIX matches as a substring (not a prefix)."
   `(,(format "Crates: %s"
              (or crate-browse--name-prefix "all"))
     (name-prefix . ,crate-browse--name-prefix)
+    (sort-key . ,tabulated-list-sort-key)
+    (widths . ,(crate-browse--column-widths))
     (handler . crate-browse--bookmark-jump)))
+
+(defun crate-browse--restore-state (bookmark)
+  "Restore the sort key and column widths that BOOKMARK holds.
+A sort key that names no column and a width list that does not
+match the table are ignored, so an old bookmark still opens.
+Restoring a saved width makes it the width that a later fit starts
+from.  The table reprints only when a value lands."
+  (let ((sort-key (alist-get 'sort-key bookmark))
+        (widths (alist-get 'widths bookmark))
+        (columns (append tabulated-list-format nil))
+        (restored nil))
+    (when (derived-mode-p 'crate-browse-mode)
+      (when (and (consp sort-key)
+                 (member (car sort-key) (mapcar #'car columns)))
+        (setq tabulated-list-sort-key (cons (car sort-key) (cdr sort-key))
+              restored t))
+      (when (and (listp widths)
+                 (cl-every #'integerp widths)
+                 (= (length widths) (length columns)))
+        (setq tabulated-list-format
+              (crate-browse--format-widths tabulated-list-format widths)
+              restored t)
+        (setq-local crate-browse--canonical-widths widths))
+      (when restored
+        (tabulated-list-init-header)
+        (tabulated-list-print t)))))
 
 (defun crate-browse--bookmark-jump (bookmark)
   "Restore a crate browse BOOKMARK.
@@ -1561,7 +1589,8 @@ added crates appear on reopen."
         name-list)
     (when name-prefix
       (setq name-list (crate--filter-by-name name-prefix)))
-    (crate-browse-crates name-list name-prefix)))
+    (crate-browse-crates name-list name-prefix)
+    (crate-browse--restore-state bookmark)))
 
 ;;;###autoload
 (defun crate-browse-crates (&optional name-list name-prefix)

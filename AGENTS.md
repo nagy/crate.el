@@ -466,6 +466,17 @@ properties.  Both live under the `e' prefix keymap
 place that honors `crate-display-buffer-action', and `find-crate'
 uses it too.
 
+**A table bookmark saves the sort key and the column widths.**
+The record holds `name-prefix', `sort-key' (a `(NAME . FLIP)' cons)
+and `widths' (one integer per column), so a saved filtered view
+reopens the way it looked.  The filtered name-list is still
+re-derived from the live cache.  `crate-browse--restore-state'
+applies both after the browse command returns: it ignores a sort
+key that names no column and a width list of the wrong length (an
+old bookmark must still open), makes a restored width the base of a
+later fit through `crate-browse--canonical-widths', and reprints
+once when a value lands.
+
 ### Org link support
 
 Org link types live in `ol-crate.el`, loaded via
