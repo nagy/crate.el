@@ -127,7 +127,8 @@ is nil. Callers must use `(cadddr item)` to get docs:
     funnel for all entry points — interactive, URL handler, browse
     visit, bookmarks, dependency buttons — and runs
     `crate-visit-hook` at the end, after `crate-name` and
-    `crate-data` are set and the buffer rendered)
+    `crate-data` are set and the buffer rendered; the window comes
+    from `crate-display-buffer-action`)
 11. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
 12. Org Integration (deferred load of `ol-crate`)
@@ -430,6 +431,15 @@ value, so no feedback loop exists.
 `{` and `}` go through `crate-browse--resize-column', which refuses
 a line without an entry: `tabulated-list-widen-current-column'
 signals there.
+
+**`crate-display-buffer-action' picks the window of a detail
+buffer.**  nil keeps `switch-to-buffer' (the original behavior and
+what most tests assume); any other value goes to `pop-to-buffer'
+as its display action.  `crate--other-window-action' is the action
+for "open a crate beside the table": it reuses a window that
+already shows the buffer, else splits, and never uses the selected
+window.  Emacs has no `display-buffer-other-window' function, so do
+not reach for it.
 
 ### Org link support
 

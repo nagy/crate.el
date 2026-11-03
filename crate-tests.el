@@ -920,6 +920,110 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
         (crate-browse--window-size-changed (selected-frame))
         (should-not (buffer-local-value 'crate-browse--fit-timer buffer))))))
 
+(ert-deftest find-crate-switches-buffer-by-default ()
+  "A nil `crate-display-buffer-action' keeps `switch-to-buffer'."
+  (let ((crate-display-buffer-action nil)
+        (crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (switched nil) (popped nil))
+    (puthash (list 'data crate-data-path)
+             (crate-test--crate-table
+              '("serde" :name "serde" :latest_version "1.0.0"))
+             crate--data-cache)
+    (cl-letf (((symbol-function 'switch-to-buffer)
+               (lambda (&rest _) (setq switched t)))
+              ((symbol-function 'pop-to-buffer)
+               (lambda (&rest _) (setq popped t)))
+              ((symbol-function 'cd) #'ignore))
+      (find-crate "serde"))
+    (should switched)
+    (should-not popped)))
+
+(ert-deftest find-crate-honors-display-buffer-action ()
+  "`find-crate' routes a display action to `pop-to-buffer'."
+  (let ((crate-display-buffer-action crate--other-window-action)
+        (crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (action :unset) (name nil))
+    (puthash (list 'data crate-data-path)
+             (crate-test--crate-table
+              '("serde" :name "serde" :latest_version "1.0.0"))
+             crate--data-cache)
+    (cl-letf (((symbol-function 'pop-to-buffer)
+               (lambda (buffer &optional act) (setq name buffer action act)))
+              ((symbol-function 'cd) #'ignore))
+      (find-crate "serde"))
+    (should (equal name "Crate: serde"))
+    (should (equal action crate--other-window-action))))
+
+(ert-deftest crate-browse-open-other-window-passes-action ()
+  "`crate-browse-open-other-window' binds the action for one call."
+  (let ((crate-display-buffer-action nil)
+        (crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (seen-name nil) (seen-action :unset))
+    (puthash (list 'data crate-data-path)
+             (crate-test--crate-table
+              '("serde" :name "serde" :latest_version "1.0.0"))
+             crate--data-cache)
+    (cl-letf (((symbol-function 'find-crate)
+               (lambda (name)
+                 (setq seen-name name
+                       seen-action crate-display-buffer-action)))
+              ((symbol-function 'tabulated-list-get-id) (lambda () "serde")))
+      (with-temp-buffer
+        (crate-browse-mode)
+        (crate-browse-open-other-window)))
+    (should (equal seen-name "serde"))
+    (should (equal seen-action crate--other-window-action))
+    ;; The option itself is untouched.
+    (should-not crate-display-buffer-action)))
+
+(ert-deftest crate-browse-display-refuses-non-table-buffer ()
+  "`crate-browse--display' signals outside a table buffer."
+  (with-temp-buffer
+    (fundamental-mode)
+    (should-error (crate-browse--display "serde" nil) :type 'user-error)))
+
+(ert-deftest crate-browse-display-refuses-blank-line ()
+  "`crate-browse--display' signals on a line without a crate."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (should-error (crate-browse--display nil nil) :type 'user-error)))
+
+(ert-deftest crate-browse-open-other-window-mouse-reads-clicked-row ()
+  "The middle button opens the row under the click, not the selection."
+  (let ((buffer (get-buffer-create "*Crates mouse*"))
+        (crate-display-buffer-action nil)
+        (seen-name nil) (seen-action :unset))
+    (unwind-protect
+        (with-current-buffer buffer
+          (crate-browse-mode)
+          (setq tabulated-list-entries
+                (list (list "ahash" (vector "ahash" "1.0.0" "hash"))
+                      (list "serde" (vector "serde" "1.0.0" "framework"))))
+          (tabulated-list-print)
+          (set-window-buffer (selected-window) buffer)
+          ;; The click lands on the first row; point sits on the second.
+          (goto-char (point-min))
+          (forward-line 1)
+          (cl-letf (((symbol-function 'find-crate)
+                     (lambda (name)
+                       (setq seen-name name
+                             seen-action crate-display-buffer-action))))
+            (crate-browse-open-other-window-mouse
+             (list 'mouse-2 (list (selected-window) (point-min) '(0 . 0) 0)))))
+      (kill-buffer buffer))
+    (should (equal seen-name "ahash"))
+    (should (equal seen-action crate--other-window-action))))
+
+(ert-deftest crate-browse-binds-other-window-keys ()
+  "The `o' key and the middle button open a crate elsewhere."
+  (should (eq (lookup-key crate-browse-mode-map "o")
+              #'crate-browse-open-other-window))
+  (should (eq (lookup-key crate-browse-mode-map [mouse-2])
+              #'crate-browse-open-other-window-mouse)))
+
 ;;; End-to-end tests with test data
 
 (defvar crate-test--data-file "@testCratesDb@"

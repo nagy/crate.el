@@ -155,6 +155,23 @@ to, e.g., set `default-directory' to a local checkout."
   :type 'hook
   :group 'crate)
 
+(defcustom crate-display-buffer-action nil
+  "Display action for the `find-crate' detail buffer.
+nil keeps `switch-to-buffer', which replaces the current buffer.
+Set it to `crate--other-window-action' to open a crate beside the
+buffer that you started from.  The `o' key and the middle mouse
+button of `crate-browse-mode' bind this option for one call."
+  :type '(choice (const :tag "Selected window" nil) function)
+  :group 'crate)
+
+(defconst crate--other-window-action
+  '((display-buffer-reuse-window display-buffer-pop-up-window)
+    (inhibit-same-window . t))
+  "Display action that opens a buffer in another window.
+Emacs has no ready-made action for this: it reuses a window that
+already shows the buffer, or splits one, and never uses the
+selected window.")
+
 ;;; Cache
 
 (defvar crate--data-cache (make-hash-table :test #'equal))
@@ -817,7 +834,8 @@ When called interactively, prompt for a crate name with
 completion.  If NAME is a crates.io URL, the URL prefix is
 stripped first; a trailing version path segment is dropped with a
 message naming the requested version.  Creates a new buffer named
-\"Crate: <name>\" or switches to an existing one."
+\"Crate: <name>\" or switches to an existing one.
+`crate-display-buffer-action' chooses the window that shows it."
   (interactive)
   (let ((cand (or name
                   (completing-read "crate> " #'crate--collection))))
@@ -842,7 +860,9 @@ message naming the requested version.  Creates a new buffer named
       (unless entry
         (user-error "Crate `%s' not found" cand))
       (let ((bufname (format "Crate: %s" cand)))
-        (switch-to-buffer bufname)
+        (if crate-display-buffer-action
+            (pop-to-buffer bufname crate-display-buffer-action)
+          (switch-to-buffer bufname))
         (crate-mode)
         ;; Set the crate locals after `crate-mode' (whose
         ;; `kill-all-local-variables' would otherwise wipe them),
@@ -904,6 +924,8 @@ and delegates to `find-crate'."
   :doc "Keymap for `crate-browse-mode'."
   :parent tabulated-list-mode-map
   "RET" #'crate-browse-visit
+  "o"   #'crate-browse-open-other-window
+  "<mouse-2>" #'crate-browse-open-other-window-mouse
   "b"   #'crate-browse-search-url
   "w"   #'crate-copy-dependency
   "{"   #'crate-browse-narrow-column
@@ -915,6 +937,7 @@ and delegates to `find-crate'."
 \\{crate-browse-mode-map}
 \\<crate-browse-mode-map>
 \\[crate-browse-visit] on an entry to view full details,
+\\[crate-browse-open-other-window] to view them in another window,
 \\[crate-browse-search-url] to open on crates.io,
 \\[crate-browse-widen-column] and \\[crate-browse-narrow-column] to
 resize a column,
@@ -1262,6 +1285,43 @@ as a user error."
   (interactive)
   (browse-url (concat crate--crates-io-url
                       (crate-browse--current-name))))
+
+(defun crate-browse--display (name action)
+  "Display the detail buffer of crate NAME with display ACTION."
+  (unless (derived-mode-p 'crate-browse-mode)
+    (user-error "Not a crate table buffer"))
+  (unless name
+    (user-error "No crate on this line"))
+  (let ((crate-display-buffer-action action))
+    (find-crate name)))
+
+(defun crate-browse-open-other-window ()
+  "Open the crate at point in another window."
+  (interactive)
+  (crate-browse--display (tabulated-list-get-id)
+                        crate--other-window-action))
+
+(defun crate-browse--name-at-event (event)
+  "Return the crate name of the table row under mouse click EVENT."
+  (let* ((start (event-start event))
+         (window (posn-window start))
+         (position (posn-point start)))
+    (when (and (windowp window) (integer-or-marker-p position))
+      (with-current-buffer (window-buffer window)
+        (save-excursion
+          (goto-char position)
+          (tabulated-list-get-id))))))
+
+(defun crate-browse-open-other-window-mouse (event)
+  "Open the table row under mouse click EVENT in another window."
+  (interactive "e")
+  (let* ((start (event-start event))
+         (window (posn-window start)))
+    (unless (windowp window)
+      (user-error "No crate under the mouse"))
+    (with-current-buffer (window-buffer window)
+      (crate-browse--display (crate-browse--name-at-event event)
+                            crate--other-window-action))))
 
 (defun crate-browse--reload ()
   "Rebuild `tabulated-list-entries' from the buffer-local filter.
