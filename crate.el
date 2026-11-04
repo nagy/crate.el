@@ -1302,6 +1302,18 @@ and delegates to `find-crate'."
 (with-eval-after-load 'org
   (require 'ol-crate))
 
+;;; Evil Integration
+
+;; The layer lives in its own file, so a user who has no evil loads no
+;; evil code.  A user who loads evil after crate.el gets the layer at
+;; that moment, and `crate-evil-auto-enable' decides whether the layer
+;; enables itself.
+(declare-function crate-evil-auto-setup "evil-crate" ())
+
+(with-eval-after-load 'evil
+  (require 'evil-crate)
+  (crate-evil-auto-setup))
+
 
 ;;; Browse Mode
 

@@ -28,6 +28,8 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 - A table bookmark keeps the sort key and the column widths
 - Redirect crates.io URLs to =find-crate= via =browse-url= handler
 - Org link type: =crate:=
+- Optional Evil layer: motion, fold, copy and export keys in the table
+  and the detail buffer
 - Module tree display from rustdoc JSON (optional, requires Nix)
 - Bookmark support for both detail and browse buffers
 
@@ -41,6 +43,31 @@ To enable the browse URL handler:
 #+begin_src elisp
   (crate-install-browse-url-handler)
 #+end_src
+
+* Evil
+
+With evil on the load path, =crate.el= loads =evil-crate.el= when evil
+loads and enables =crate-evil-mode=.  No extra line is necessary.  To
+keep the bindings off, set the option before evil loads:
+
+#+begin_src elisp
+  (setq crate-evil-auto-enable nil)
+#+end_src
+
+Every key that evil already binds goes through a key remap, so a user
+who moves =evil-ret= to another key keeps the crate behavior on the new
+key.  The evil motions stay untouched.
+
+- In the table: =RET= opens the row, =o= opens it in another window,
+  =c= opens crates.io, =y= and =Y= copy a dependency line, =S= sorts
+  the column at point, =gc= and =gm= export the visible rows, =q=
+  quits the window, =gr= refreshes and =r= or =R= refreshes without a
+  confirmation.  A visual line selection followed by =y= copies one
+  dependency line per selected row.
+- In a detail buffer: =RET= opens the link at point, =TAB= folds the
+  section at point, =c= opens crates.io, =y= and =Y= copy a dependency
+  line, =q= quits the window, =gr= refreshes.  =zc=, =zo= and =za=
+  fold through =outline-minor-mode=.
 
 * Crate details
 

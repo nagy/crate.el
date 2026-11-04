@@ -80,7 +80,16 @@
               pkgs.emacs
               pkgs.nix
               pkgs.sqlite
+              # The optional evil layer needs evil to compile and to
+              # test.  The package never declares it.
+              pkgs.emacsPackages.evil
             ];
+            # A plain `emacs -L .' sees evil through the load path.
+            shellHook = ''
+              evil_dir=$(find ${pkgs.emacsPackages.evil}/share/emacs/site-lisp/elpa \
+                -mindepth 1 -maxdepth 1 -type d -name 'evil-*' -print -quit)
+              export EMACSLOADPATH="$evil_dir:''${EMACSLOADPATH-}"
+            '';
           };
 
           formatter = pkgs.nixfmt;

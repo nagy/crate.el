@@ -11,24 +11,29 @@ URLs to `find-crate`.
 
 ```sh
 nix build                       # build
-nix flake check                 # build + ERT suite
+nix flake check                 # build + both ERT suites
 nix build .#screenshot          # regenerate README screenshot
 nix build .#gitrepo             # bare .git dir holding the screenshot
 emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
+emacs --batch -L . -l evil-crate-tests.el -f ert-run-tests-batch-and-exit
 ```
 
-Dev shell tools: Emacs, Nix, sqlite.
+Dev shell tools: Emacs, Nix, sqlite, and evil on `EMACSLOADPATH`, so
+the evil suite runs in a plain shell.
 
 Flake outputs: `packages.crate` (= `default`) is `nix/default.nix`
-(`melpaBuild`); its `checkPhase` runs the ERT suite against
-`nix/test-crates-db.nix`.  `packages.screenshot` and `packages.gitrepo`
-come from `nix/emacs-screenshot.nix`, which uses
+(`melpaBuild`); its `checkPhase` runs both ERT suites against
+`nix/test-crates-db.nix`.  The `preBuild` phase puts the elpa
+directory of `emacsPackages.evil` on `EMACSLOADPATH`, because
+`evil-crate.el` needs evil to compile and to test.  The package still
+declares no dependency on evil.  `packages.screenshot` and
+`packages.gitrepo` come from `nix/emacs-screenshot.nix`, which uses
 `mkGitRepository` imported from the `nur-packages` flake input (not
 vendored).
 
 Byte-compile with warnings as errors (wired into the Nix
 build's checkPhase for all elisp files — crate.el, ol-crate.el,
-crate-tests.el):
+crate-tests.el, evil-crate.el, evil-crate-tests.el):
 
 ```sh
 emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
@@ -41,8 +46,10 @@ Files:
 
 - `crate.el` — main package
 - `ol-crate.el` — Org link support
+- `evil-crate.el` — optional evil layer (soft dependency)
 - `nix/crate-doc.nix` — Nix expression for rustdoc JSON builds
 - `crate-tests.el` — ERT test suite
+- `evil-crate-tests.el` — ERT suite of the evil layer
 - `nix/default.nix` — package expression (`melpaBuild`)
 - `nix/test-crates-db.nix` — fixture SQLite database for tests/screenshots
 - `nix/emacs-screenshot.nix` — Nix expression for screenshot generation
@@ -140,17 +147,19 @@ is nil. Callers must use `(cadddr item)` to get docs:
 12. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
 13. Org Integration (deferred load of `ol-crate`)
-14. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+14. Evil Integration (deferred load of `evil-crate` when evil loads,
+    and the `crate-evil-auto-setup` call)
+15. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
-15. Dependency Copy (`crate-copy-dependency`, bound to `w` in
+16. Dependency Copy (`crate-copy-dependency`, bound to `w` in
     `crate-mode-map`, `crate-browse-mode-map`, and
     `crate-embark-map`; copies `NAME = "VERSION"` for
     `Cargo.toml`)
-16. Cargo.toml Integration (`crate-cargo-completion-at-point`,
+17. Cargo.toml Integration (`crate-cargo-completion-at-point`,
     `crate-install-cargo-toml-capf`, `crate-cargo-toml-modes` —
     crate-name completion in `[dependencies]` family sections,
     soft TOML-mode dep via the modes list)
-17. Embark (action keymap `crate-embark-map`, export function,
+18. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions
@@ -613,6 +622,40 @@ Org link types live in `ol-crate.el`, loaded via
 references to functions and variables from `crate.el` use
 `declare-function` and `defvar` in `ol-crate.el`.
 
+### Evil layer
+
+`evil-crate.el` is the optional evil layer, and the package never
+requires evil.  `crate.el` loads it from
+`(with-eval-after-load 'evil (require 'evil-crate))` and then calls
+`crate-evil-auto-setup`, which enables the global `crate-evil-mode`
+unless `crate-evil-auto-enable` is nil.  A user without evil loads no
+evil code.
+
+`evil-crate.el` must not `(require 'crate)`.  When a user loads evil
+before crate.el, the `with-eval-after-load` block runs while crate.el
+is still loading, and a `require` of crate there signals "Recursive
+`require'".  The file uses `declare-function` and `defvar` for
+everything it takes from crate.el.
+
+The global mode enables one local minor mode per buffer
+(`crate-evil-detail-mode` in `crate-mode`, `crate-evil-browse-mode` in
+`crate-browse-mode`) through `after-change-major-mode-hook`, because
+`define-derived-mode` wipes local state.  Evil keeps the state maps of
+a minor mode apart from the major mode map, so every command key needs
+a state binding to reach the buffer.
+
+A key that evil already binds goes through `[remap COMMAND]`.  A remap
+follows the command and not the key, so a user who moves `evil-ret`
+keeps the crate behavior on the new key.  A key that evil leaves free,
+such as `gr`, `gc` or `gm`, is a plain key string.  The evil motions
+(`j`, `k`, `gg`, `G`, `C-d`, `C-u`, `/`, `n`, `N`) stay untouched.
+
+The fold commands of evil (`zc`, `zo`, `za`) reach the sections through
+`evil-fold-list` and the `outline-minor-mode` entry, because a detail
+buffer runs that minor mode and its headings carry `crate-section`.
+`crate-toggle-section` and `crate-link-map` keep `TAB` for the fold in
+the normal state.
+
 ### Null guard in `when-let*` conditions
 
 JSON `null` becomes the keyword `:null` from `json-parse-buffer`.
@@ -666,6 +709,15 @@ against it in the `when-let*` binding, not in the body:
   `add-hook` their lambda, then assert on `(buffer-name)`, `crate-name`,
   and `crate-data` inside the hook — verifying it fires once per
   `find-crate` call, in the crate buffer, after locals are set.
+- Evil tests live in `evil-crate-tests.el` and need evil on the load
+  path.  The file requires evil before crate, so the auto setup runs at
+  load and `crate-evil-mode` starts on: a test that expects it off
+  disables it first.  A key test uses `evil-local-mode` plus
+  `evil-normal-state` (or `evil-visual-line`) in the mode buffer, then
+  `key-binding` on the key.
+- Evil is not a package dependency, so `crate-tests.el` must not
+  require it.  A test that needs no evil keeps passing in a build
+  without it.
 
 ## Dependencies
 
@@ -677,9 +729,10 @@ against it in the `when-let*` binding, not in the body:
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | goto-addr | yes | built-in, links the URLs of a detail buffer |
 | outline | yes | built-in, folds the sections of a detail buffer |
+| evil | soft | optional key layer in `evil-crate.el`; the package never requires it |
 | nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `nix/crate-doc.nix` for on-demand rustdoc JSON |
 
 ## TODO
 
 None right now.  The former Cargo.toml completion-at-point TODO
-shipped as section 15.
+shipped as section 17.
