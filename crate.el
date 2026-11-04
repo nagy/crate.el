@@ -56,6 +56,7 @@
 (require 'bookmark)
 (require 'json)
 (require 'cl-lib)
+(require 'goto-addr)
 ;; `thing-at-point-provider-alist' is defined here; crate-mode sets it
 ;; buffer-locally, so the file must be loaded for the variable to exist.
 (require 'thingatpt)
@@ -171,6 +172,14 @@ Set it to `crate--other-window-action' to open a crate beside the
 buffer that you started from.  The `o' key and the middle mouse
 button of `crate-browse-mode' bind this option for one call."
   :type '(choice (const :tag "Selected window" nil) function)
+  :group 'crate)
+
+(defcustom crate-goto-address t
+  "Whether a detail buffer links the URLs in its text.
+When non-nil, `goto-address-mode' turns the homepage, repository
+and documentation URL of a crate into a link, so a click and RET
+open it.  Set it to nil to keep the URLs as plain text."
+  :type 'boolean
   :group 'crate)
 
 (defconst crate--other-window-action
@@ -622,6 +631,8 @@ This mode is not intended to be invoked directly; use
 `crate--render' after the mode is set up."
   (setq-local default-directory temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
+  (when crate-goto-address
+    (goto-address-mode 1))
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'crate--revert)
   ;; Make dependency crate names detectable as crates.io URLs by
@@ -692,7 +703,7 @@ bracketed tag before the name."
       (insert "Repository:    ")
       (when-let* ((repo (gethash "repository" crate-data))
                   ((not (eq repo :null))))
-        (insert (propertize repo 'mouse-face 'highlight))
+        (insert repo)
         (when crate-repository-directory
           (let ((dir (cond
                       ((functionp crate-repository-directory)
@@ -764,12 +775,8 @@ bracketed tag before the name."
           (insert "Modules: (rustdoc unavailable)\n"))
          ((and crate-doc-enable (gethash crate-name crate-doc--in-flight))
           (insert "Modules: (rustdoc build in progress…)\n"))))
-      ;; Apply mouse-face to URLs (font-lock only handles the `face' property)
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward "https?://[^[:space:]\n]+" nil t)
-          (add-text-properties (match-beginning 0) (match-end 0)
-                               '(mouse-face highlight))))
+      ;; `goto-address-mode' links the URLs, so the renderer adds no
+      ;; mouse face of its own.
       (font-lock-ensure)
       (set-buffer-modified-p nil)
       (goto-char (point-min)))))

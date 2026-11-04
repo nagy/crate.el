@@ -11,6 +11,8 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 * Features
 
 - =M-x find-crate= with completion, Marginalia annotations, and Embark actions
+- The homepage, repository and documentation URL of a detail buffer are
+  clickable links, unless =crate-goto-address= is nil
 - =M-x crate-browse-crates= tabulated list view with sorting and bookmarks
 - The Version column sorts as semver (=1.9.0= before =1.10.0=, a
   pre-release before its release) and the columns fit the window;

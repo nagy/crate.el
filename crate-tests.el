@@ -154,6 +154,38 @@ record, not the top-level crate table)."
                                   ;; Updated has no key → label only.
                                   (should (string-match-p "Updated: *\n" content))))))))
 
+(ert-deftest crate-mode-links-urls-with-goto-address ()
+  "A detail buffer links the URLs in its text."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash
+                                :name "test-crate"
+                                :homepage "https://example.com/"
+                                :repository "https://example.org/repo"))
+        (crate--render)
+        (should goto-address-mode)
+        (goto-address-fontify)
+        (dolist (url '("https://example.com/" "https://example.org/repo"))
+          (goto-char (point-min))
+          (should (search-forward url nil t))
+          (goto-char (match-beginning 0))
+          (let ((overlay (cl-find-if
+                          (lambda (candidate)
+                            (overlay-get candidate 'goto-address))
+                          (overlays-at (point)))))
+            (should overlay)
+            (should (eq (overlay-get overlay 'mouse-face) 'highlight))))))))
+
+(ert-deftest crate-mode-goto-address-option ()
+  "A nil `crate-goto-address' keeps the URLs as plain text."
+  (let ((crate-goto-address nil))
+    (with-temp-buffer
+      (crate-mode)
+      (should-not goto-address-mode))))
+
 (ert-deftest crate-mode-deps-url-at-point ()
   "Dependency crate names are `thing-at-point' `url' detectable."
   (let ((crate--data-cache (make-hash-table :test 'equal)))

@@ -372,8 +372,20 @@ matches is wiped by re-fontification (a plain `propertize` face on
 the version value becomes nil).  This is why the version/date/id/
 description/URL value faces all live in `crate-font-lock-keywords`
 as `(1 'face)` group 1 rules on `^Label:[[:space:]]+` patterns.
-Where a text property is genuinely needed (e.g. `mouse-face` on
-URLs), use non-`face` properties.
+Where a text property is genuinely needed, use non-`face`
+properties.
+
+### Links in a detail buffer
+
+`crate-mode` enables `goto-address-mode` through the
+`crate-goto-address` option, which defaults to t.  The minor mode
+links the homepage, repository and documentation URLs, so the
+renderer adds no link of its own: `goto-address` marks a URL with
+an evaporating overlay that carries the mouse face, the `RET` and
+`mouse-2` keys and the help text.  A renderer never sets
+`mouse-face` on a URL, because an overlay survives re-fontification
+and a text property that hints at a link without an action only
+misleads.
 
 ### `thing-at-point` URL provider for dependency names
 
@@ -575,6 +587,7 @@ against it in the `when-let*` binding, not in the body:
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
+| goto-addr | yes | built-in, links the URLs of a detail buffer |
 | nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `nix/crate-doc.nix` for on-demand rustdoc JSON |
 
 ## TODO
