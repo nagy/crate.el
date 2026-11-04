@@ -1435,6 +1435,141 @@ Substituted at build time by default.nix.")
 
 ;;; Gap-closing tests
 
+(ert-deftest crate-mode-render-keeps-point-on-field ()
+  "A fresh render keeps point on the same field and column."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'crate-doc--json) #'ignore))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash
+                                :name "test-crate"
+                                :latest_version "1.2.3"
+                                :license "MIT"))
+        (crate--render)
+        (goto-char (point-min))
+        (search-forward "MIT")
+        (goto-char (match-beginning 0))
+        (let ((line (line-number-at-pos))
+              (column (current-column)))
+          (crate--render)
+          (should (= (line-number-at-pos) line))
+          (should (= (current-column) column))
+          (should (equal (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         "License:       MIT")))))))
+
+(ert-deftest crate-mode-render-keeps-point-on-blank-line ()
+  "A blank line leans on the line above it, so it stays put."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash :name "test-crate"))
+        (crate--render)
+        (goto-char (point-max))
+        (let ((line (line-number-at-pos)))
+          (crate--render)
+          (should (= (line-number-at-pos) line))
+          (should (string-empty-p
+                   (buffer-substring-no-properties
+                    (line-beginning-position) (line-end-position)))))))))
+
+(ert-deftest crate-mode-render-keeps-point-on-dependency ()
+  "A render keeps point on a dependency whose line moved down."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (deps '(("aaa" "^1" "normal" 0)
+                ("serde" "^1" "normal" 0))))
+    (cl-letf (((symbol-function 'crate--deps) (lambda (_name) deps))
+              ((symbol-function 'crate--dependents) #'ignore))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash :name "test-crate"))
+        (crate--render)
+        (goto-char (point-min))
+        (search-forward "serde")
+        (goto-char (match-beginning 0))
+        (let ((column (current-column)))
+          (setq deps '(("aaa" "^1" "normal" 0)
+                       ("bbb" "^1" "normal" 0)
+                       ("serde" "^1" "normal" 0)))
+          (crate--render)
+          (should (= (current-column) column))
+          (should (equal (thing-at-point 'url t)
+                         (concat crate--crates-io-url "serde"))))))))
+
+(ert-deftest crate-mode-render-keeps-point-on-module-item ()
+  "A render keeps point on the same item of the module tree."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'crate-doc--json) (lambda (_name) :json))
+              ((symbol-function 'crate-doc--module-tree)
+               (lambda (_json)
+                 '(("root" module
+                    (("aaa" struct nil nil)
+                     ("zed" struct nil "Zed."))
+                    nil)))))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash :name "test-crate"))
+        (crate--render)
+        (goto-char (point-min))
+        (search-forward "zed")
+        (goto-char (match-beginning 0))
+        (crate--render)
+        (should (equal (get-text-property (point) 'crate-module)
+                       "root/zed"))
+        (should (looking-at-p "zed"))))))
+
+(ert-deftest crate-mode-render-keeps-another-window-point ()
+  "A render keeps the line of a window that is not selected."
+  (let ((buffer (get-buffer-create "*Crate windows*"))
+        (crate--data-cache (make-hash-table :test 'equal)))
+    (unwind-protect
+        (let (other position)
+          (with-current-buffer buffer
+            (crate-mode)
+            (setq-local crate-name "test-crate")
+            (setq-local crate-data (crate-test--data-hash
+                                    :name "test-crate"
+                                    :license "MIT"))
+            (cl-letf (((symbol-function 'crate--deps) #'ignore)
+                      ((symbol-function 'crate--dependents) #'ignore)
+                      ((symbol-function 'crate-doc--json) #'ignore))
+              (crate--render)))
+          (set-window-buffer (selected-window) buffer)
+          (setq other (split-window))
+          (unwind-protect
+              (progn
+                (set-window-buffer other buffer)
+                (with-current-buffer buffer
+                  (setq position (save-excursion
+                                   (goto-char (point-min))
+                                   (search-forward "MIT")
+                                   (match-beginning 0)))
+                  (set-window-point other position)
+                  ;; The selected window stays at the start of the buffer.
+                  (goto-char (point-min))
+                  (cl-letf (((symbol-function 'crate--deps) #'ignore)
+                            ((symbol-function 'crate--dependents) #'ignore)
+                            ((symbol-function 'crate-doc--json) #'ignore))
+                    (crate--render))
+                  (should (equal (buffer-substring-no-properties
+                                  (window-point other)
+                                  (+ (window-point other) 3))
+                                 "MIT"))
+                  (should (= (point) (point-min)))))
+            (delete-window other)))
+      (kill-buffer buffer))))
+
 (ert-deftest crate-mode-links-are-one-button-type ()
   "Every link of a detail buffer is a `crate-link' button.
 The type carries the mouse face, so the pointer highlights a

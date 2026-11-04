@@ -626,6 +626,192 @@ Inherits from `package-description' when available."
   'follow-link t
   'help-echo "Open link")
 
+;;; Point keeping
+
+;; A render erases the buffer, so `crate--render' records the line of
+;; point before the render and restores it after the render.  The
+;; record names the line and not a buffer position: a field key, a
+;; module path, the URL of a crate link or, for a line without such an
+;; identity, the text of the line and its ordinal among the equal lines
+;; above it.  A blank line leans on the nearest line above that has an
+;; identity, and the column of point travels with the line.  So a
+;; refresh keeps the reader on the same value even when the lines above
+;; changed their length.
+
+(defun crate--line-text ()
+  "Return the text of the current line without properties."
+  (declare (side-effect-free t))
+  (string-trim-right
+   (buffer-substring-no-properties (line-beginning-position)
+                                   (line-end-position))))
+
+(defun crate--line-occurrence (text)
+  "Return the number of lines above point that hold TEXT.
+The count is the ordinal of the line of point among the equal
+lines of the buffer, so a renderer that keeps one of two equal
+lines keeps the right one."
+  (declare (side-effect-free t))
+  (let ((origin (line-beginning-position)))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((count 0))
+        (while (< (point) origin)
+          (when (equal (crate--line-text) text)
+            (setq count (1+ count)))
+          (forward-line 1))
+        count))))
+
+(defun crate--line-identity ()
+  "Return the identity of the line of point, or nil.
+The identity is a cons of a kind and a value: `field' and the
+field key, `module' and the path of the item in the module tree,
+`link' and the URL of a crate link, or `text' and a cons of the
+text of the line and its ordinal among the equal lines above it.
+A line of whitespace alone has no identity, because its text would
+match every blank line."
+  (declare (side-effect-free t))
+  (let ((start (line-beginning-position)))
+    (or (when-let* ((key (get-text-property start 'crate-field)))
+          (cons 'field key))
+        (when-let* ((path (get-text-property start 'crate-module)))
+          (cons 'module path))
+        (when-let* ((url (get-text-property start 'crate-url)))
+          (cons 'link url))
+        (let ((text (crate--line-text)))
+          (unless (string-empty-p text)
+            (cons 'text (cons text (crate--line-occurrence text))))))))
+
+(defun crate--point-record (&optional position)
+  "Return a record of the line at POSITION, or nil.
+POSITION defaults to point.  The record holds the identity of the
+line, the number of lines from the line that the identity names to
+the line of POSITION, and the column of POSITION.  A line of
+whitespace alone leans on the nearest line above that has an
+identity, so the record keeps the distance from that line.  Return
+nil when no line of the buffer has an identity, because then there
+is no place to keep."
+  (let ((offset 0)
+        column
+        identity)
+    (save-excursion
+      (goto-char (or position (point)))
+      (setq column (- (point) (line-beginning-position)))
+      (beginning-of-line)
+      (let ((done nil))
+        (while (not done)
+          (setq identity (crate--line-identity))
+          (cond (identity (setq done t))
+                ((bobp) (setq done t))
+                (t
+                 (setq offset (1+ offset))
+                 (forward-line -1))))))
+    (when identity
+      (list :identity identity :offset offset :column column))))
+
+(defun crate--goto-property (property value)
+  "Move point to the line whose PROPERTY equals VALUE.
+Return non-nil when the buffer holds such a line.  `equal'
+compares the value, because a string property is not `eq' to
+another string that spells the same text."
+  (let ((position (point-min))
+        found)
+    (while (and (not found) (< position (point-max)))
+      (when (equal (get-text-property position property) value)
+        (setq found position))
+      (setq position (or (next-single-property-change position property
+                                                      nil (point-max))
+                         (point-max))))
+    (when found
+      (goto-char found)
+      (beginning-of-line)
+      t)))
+
+(defun crate--goto-text (line)
+  "Move point to the line that LINE names.
+LINE is a cons of the text of a line and its ordinal among the
+equal lines above it.  Return non-nil when the function found such
+a line.  When the buffer holds fewer equal lines than the ordinal,
+the last one serves, because a new line can push an old one down,
+and the reader stays in the same part of the buffer."
+  (let ((text (car line))
+        (ordinal (cdr line))
+        (index 0)
+        found
+        last)
+    (goto-char (point-min))
+    (while (re-search-forward (concat "^" (regexp-quote text) "[ \t]*$")
+                              nil t)
+      (setq last (line-beginning-position))
+      (unless (or found (< index ordinal))
+        (setq found last))
+      (setq index (1+ index)))
+    (when (or found last)
+      (goto-char (or found last))
+      t)))
+
+(defun crate--goto-identity (identity)
+  "Move point to the line that IDENTITY names.
+Return non-nil when the function found that line.  It leaves point
+at `point-min' when it found none."
+  (pcase identity
+    (`(field . ,key) (crate--goto-property 'crate-field key))
+    (`(module . ,path) (crate--goto-property 'crate-module path))
+    (`(link . ,url) (crate--goto-property 'crate-url url))
+    (`(text . ,line) (crate--goto-text line))
+    (_ nil)))
+
+(defun crate--record-position (record)
+  "Return the buffer position that RECORD names, or nil.
+The position is the start of the line that the identity of RECORD
+names, moved down by the recorded number of lines and set to the
+recorded column.  A shorter line clips the column to its end."
+  (declare (side-effect-free t))
+  (when record
+    (save-excursion
+      (goto-char (point-min))
+      (when (crate--goto-identity (plist-get record :identity))
+        (forward-line (plist-get record :offset))
+        (let ((column (plist-get record :column)))
+          (unless (zerop column)
+            (goto-char (min (+ (line-beginning-position) column)
+                            (line-end-position)))))
+        (point)))))
+
+(defun crate--restore-point (record)
+  "Move point to the position that RECORD describes.
+A nil RECORD moves point to the start of the buffer, because no
+line carried an identity before the render.  The column of point
+travels with the line, so a reader stays on the same column of the
+same value."
+  (goto-char (or (crate--record-position record) (point-min))))
+
+(defun crate--window-records ()
+  "Return the record of every other window that shows the buffer.
+Every window but the selected one contributes one cons of the
+window and its record.  The selected window needs no entry,
+because its point is the point of the buffer.  A window whose line
+has no identity contributes a nil record."
+  (declare (side-effect-free t))
+  (let ((buffer (current-buffer))
+        (selected (selected-window))
+        records)
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (unless (eq window selected)
+        (push (cons window (crate--point-record (window-point window)))
+              records)))
+    records))
+
+(defun crate--restore-window-points (records)
+  "Move the point of every window of RECORDS to its recorded line.
+A window whose line is gone shows the start of the buffer, and a
+dead window stays alone."
+  (dolist (record records)
+    (let ((window (car record)))
+      (when (window-live-p window)
+        (set-window-point window
+                          (or (crate--record-position (cdr record))
+                              (point-min)))))))
+
 ;;; Major Mode
 
 ;;;###autoload
@@ -635,7 +821,6 @@ Used as a `thing-at-point-provider-alist' entry for `crate-mode'
 so `thing-at-point \\='url' (and `browse-url-at-point') treat a
 dependency crate name as a link to its crates.io page.  Returns nil
 unless point is on text carrying a `crate-url' property."
-  (declare (side-effect-free t))
   (get-text-property (point) 'crate-url))
 
 (defvar-keymap crate-mode-map
@@ -677,51 +862,66 @@ live `crate-name' / `crate-data' buffer-locals so `g' works."
 
 Inserts the fields for `crate-data' (with `crate-name' as
 fallback), dependency buttons, and the rustdoc module tree.
-Erases existing content first, so re-rendering is idempotent."
-  ;; Bind `inhibit-read-only' for the whole render: the buffer may
-  ;; already be read-only from a previous render.
-  (let ((inhibit-read-only t))
-    (erase-buffer)
+Erases existing content first, so re-rendering is idempotent.
+Keeps point on the line that it was on before the render, by the
+identity of that line, and keeps its column.  Every other window
+that shows the buffer keeps the line of its own point too."
+  ;; The record of the line of point comes before the erase, because
+  ;; the erase removes the text that both the identity and the window
+  ;; point markers point into.
+  (let ((record (crate--point-record))
+        (windows (crate--window-records)))
+    ;; Bind `inhibit-read-only' for the whole render: the buffer may
+    ;; already be read-only from a previous render.
+    (let ((inhibit-read-only t))
+      (erase-buffer)
     (cl-labels
         ((field (label key)
            "Insert LABEL, then the value of KEY from `crate-data'.
-If the value is nil or :null, nothing is inserted after the label."
-           (insert label)
+If the value is nil or :null, nothing is inserted after the label.
+The label carries `crate-field' with KEY, so a render keeps point
+on the field."
+           (insert (propertize label 'crate-field key))
            (let ((val (gethash key crate-data)))
              (unless (or (null val) (eq val :null))
                (insert val)))
            (insert "\n"))
-         (insert-doc-tree (items level)
+         (insert-doc-tree (items level path)
            "Insert ITEMS (from `crate-doc--module-tree') at LEVEL indentation.
-Each item is (NAME KIND CHILDREN DOC); KIND renders as a
-bracketed tag before the name."
+PATH names the module that holds the items.  Each item is (NAME
+KIND CHILDREN DOC); KIND renders as a bracketed tag before the
+name, and the name carries `crate-module' with its full path, so a
+render keeps point on the item."
            (dolist (item items)
-             (let ((name (car item))
-                   (kind (cadr item))
-                   (children (caddr item))
-                   (docs (cadddr item)))
+             (let* ((name (car item))
+                    (kind (cadr item))
+                    (children (caddr item))
+                    (docs (cadddr item))
+                    (identity (if (string-empty-p path)
+                                  name
+                                (concat path "/" name))))
                (unless (eq name :null)
                  (insert (make-string (* level 2) ?\s)
                          "- ")
                  (when kind
                    (insert (format "[%s] " kind)))
-                 (insert name)
+                 (insert (propertize name 'crate-module identity))
                  (if children
                      (progn
                        (insert "\n")
-                       (insert-doc-tree children (1+ level)))
+                       (insert-doc-tree children (1+ level) identity))
                    (when docs
                      (insert (propertize (concat " — " docs)
                                          'face 'crate-description)))
                    (insert "\n")))))))
-      (insert "Name:          ")
+      (insert (propertize "Name:          " 'crate-field 'name))
       (insert (or (gethash "name" crate-data) crate-name) "\n")
-      (insert "Description:   ")
+      (insert (propertize "Description:   " 'crate-field 'description))
       (insert (crate--description))
       (insert "\n")
       (field "Homepage:      " "homepage")
       ;; Repository
-      (insert "Repository:    ")
+      (insert (propertize "Repository:    " 'crate-field 'repository))
       (when-let* ((repo (gethash "repository" crate-data))
                   ((not (eq repo :null))))
         (insert repo)
@@ -738,7 +938,7 @@ bracketed tag before the name."
               (setq-local default-directory dir)))))
       (insert "\n")
       ;; Documentation (with docs.rs fallback)
-      (insert "Documentation: ")
+      (insert (propertize "Documentation: " 'crate-field 'documentation))
       (let ((doc (gethash "documentation" crate-data)))
         (if (and doc (not (eq doc :null)))
             (insert doc)
@@ -752,7 +952,7 @@ bracketed tag before the name."
       (insert "\n")
       (field "Version:       " "latest_version")
       (field "License:       " "license")
-      (insert "Downloads:     ")
+      (insert (propertize "Downloads:     " 'crate-field 'downloads))
       (when-let* ((dls (gethash "downloads" crate-data)))
         (insert (crate--format-downloads dls)))
       (insert "\n")
@@ -788,7 +988,7 @@ bracketed tag before the name."
         (cond
          (doc-json
           (insert "Modules:\n")
-          (insert-doc-tree (crate-doc--module-tree doc-json) 0))
+          (insert-doc-tree (crate-doc--module-tree doc-json) 0 ""))
          ((gethash (list crate-name crate-data-path) crate-doc--cache)
           (insert "Modules: (rustdoc unavailable)\n"))
          ((and crate-doc-enable (gethash crate-name crate-doc--in-flight))
@@ -796,8 +996,9 @@ bracketed tag before the name."
       ;; `goto-address-mode' links the URLs, so the renderer adds no
       ;; mouse face of its own.
       (font-lock-ensure)
-      (set-buffer-modified-p nil)
-      (goto-char (point-min)))))
+      (set-buffer-modified-p nil))
+    (crate--restore-point record)
+    (crate--restore-window-points windows))))
 
 
 ;;; Completion

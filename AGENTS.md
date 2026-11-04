@@ -78,11 +78,12 @@ Files:
 4. **`crate-doc--module-tree`** — pure function, parses JSON into nested
    `(NAME KIND (CHILDREN...) DOC)` tuples. `KIND` is a symbol (struct,
    trait, function, module, macro, enum, etc.).
-5. **`insert-doc-tree`** — `cl-labels` helper in `crate-mode`. Renders
-   the tree with indentation, each item prefixed with its KIND as a
-   bracketed tag (`- [struct] name`, fontified via
+5. **`insert-doc-tree`** — `cl-labels` helper in `crate--render`.
+   Renders the tree with indentation, each item prefixed with its KIND
+   as a bracketed tag (`- [struct] name`, fontified via
    `crate-font-lock-keywords`); shows doc summaries after leaf items,
-   skips `:null`-named items (use imports).
+   skips `:null`-named items (use imports), and tags a name with
+   `crate-module` and its full path, so a render keeps point on it.
 
 ### Tree tuple shape
 
@@ -113,36 +114,39 @@ is nil. Callers must use `(cadddr item)` to get docs:
 5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
    `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Major Mode (`crate-mode`, derived from `special-mode` for
+7. Text Buttons and Point Keeping (`crate-link` button type,
+   `crate--line-identity` and the restore helpers, which keep point
+   across the erase of a render)
+8. Major Mode (`crate-mode`, derived from `special-mode` for
    read-only + `q`/`g` conventions, thin: only
    `setq-local` for font-lock defaults, bookmark record function, and
    `revert-buffer-function`; content is inserted by `crate--render`,
    which uses the `crate-name` / `crate-data` buffer-locals)
-8. Completion (`crate--match-names`, `crate--annotate`,
+9. Completion (`crate--match-names`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
-9. Marginalia (`crate--marginalia-annotator`, registered for
+10. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
-10. Interactive Commands (`find-crate`, `crate-browse-url`,
+11. Interactive Commands (`find-crate`, `crate-browse-url`,
     `crate-install-browse-url-handler`; `find-crate` is the single
     funnel for all entry points — interactive, URL handler, browse
     visit, bookmarks, dependency buttons — and runs
     `crate-visit-hook` at the end, after `crate-name` and
     `crate-data` are set and the buffer rendered; the window comes
     from `crate-display-buffer-action`)
-11. Bookmarks (`crate--bookmark-make-record-function`,
+12. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
-12. Org Integration (deferred load of `ol-crate`)
-13. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+13. Org Integration (deferred load of `ol-crate`)
+14. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
-14. Dependency Copy (`crate-copy-dependency`, bound to `w` in
+15. Dependency Copy (`crate-copy-dependency`, bound to `w` in
     `crate-mode-map`, `crate-browse-mode-map`, and
     `crate-embark-map`; copies `NAME = "VERSION"` for
     `Cargo.toml`)
-15. Cargo.toml Integration (`crate-cargo-completion-at-point`,
+16. Cargo.toml Integration (`crate-cargo-completion-at-point`,
     `crate-install-cargo-toml-capf`, `crate-cargo-toml-modes` —
     crate-name completion in `[dependencies]` family sections,
     soft TOML-mode dep via the modes list)
-16. Embark (action keymap `crate-embark-map`, export function,
+17. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions
@@ -163,13 +167,11 @@ mode, not as top-level `defun`s.  This keeps them private and
 makes the mode self-contained.
 
 ```elisp
-(define-derived-mode crate-mode text-mode "Crate"
-  "Docstring."
-  (cl-labels ((field (label key)
-                (insert label)
-                ...))
-    (field "Homepage: " "homepage")
-    ...))
+(cl-labels ((field (label key)
+              (insert (propertize label 'crate-field key))
+              ...))
+  (field "Homepage: " "homepage")
+  ...)
 ```
 
 ### `permanent-local` for mode-surviving state
@@ -386,6 +388,31 @@ an evaporating overlay that carries the mouse face, the `RET` and
 `mouse-face` on a URL, because an overlay survives re-fontification
 and a text property that hints at a link without an action only
 misleads.
+
+### Point keeping across a render
+
+`crate--render` erases the buffer, so it records the line of point
+before the render and restores it after the render
+(`crate--point-record`, `crate--restore-point`).  The record names
+the line and not a buffer position: `crate-field` (a field key),
+`crate-module` (the path of an item in the module tree), `crate-url`
+(the URL of a crate link) or, for a line without such an identity,
+the text of the line and its ordinal among the equal lines above it
+(`crate--line-occurrence`).  A blank line leans on the nearest line
+above that has an identity, and the column travels with the line, so
+a refresh keeps the reader on the same value when the lines above
+changed length.  `crate--window-records` keeps the line of every
+other window that shows the buffer, because the erase removes the
+text that its window point markers point into.  A buffer with no
+identity holds no place to keep, so the first render still lands at
+`point-min`.  `crate--render` owns the position: no renderer or
+caller ends with `(goto-char (point-min))`.
+
+A new line identity needs three things: the text property in the
+renderer, a branch in `crate--line-identity` and a branch in
+`crate--goto-identity`.  `crate--goto-property` compares the value
+with `equal` and not with `eq`, because a re-render makes a new
+string object for a property that spells the same text.
 
 ### `thing-at-point` URL provider for dependency names
 
