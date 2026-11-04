@@ -1435,6 +1435,26 @@ Substituted at build time by default.nix.")
 
 ;;; Gap-closing tests
 
+(ert-deftest crate-mode-links-are-one-button-type ()
+  "Every link of a detail buffer is a `crate-link' button.
+The type carries the mouse face, so the pointer highlights a
+dependency name and the docs.rs fallback alike."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1.0" "normal" 0)))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (dolist (text '("serde" "https://docs.rs/test-crate"))
+            (goto-char (point-min))
+            (should (search-forward text nil t))
+            (goto-char (match-beginning 0))
+            (should (eq (button-type (button-at (point))) 'crate-link))
+            (should (eq (get-text-property (point) 'mouse-face)
+                        'highlight))))))))
+
 (ert-deftest crate-mode-renders-dependency-buttons ()
   "Dependency rows render with name, req, kind, and optional marker."
   (let ((crate--data-cache (make-hash-table :test 'equal)))

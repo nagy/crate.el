@@ -404,8 +404,8 @@ name as a link to its crates.io page:
 
 ;; Tag each dependency button with its URL:
 (insert-text-button dname
+                    :type 'crate-link
                     'action (lambda (_) (find-crate dname))
-                    'face 'crate-url
                     'crate-url (concat crate--crates-io-url dname))
 ```
 
@@ -414,6 +414,18 @@ name as a link to its crates.io page:
 the variable void and `setq-local` signals in a bare Emacs.  The
 provider only uses text properties at point, so it returns nil on
 any non-button text.
+
+### One text button type for links
+
+`crate-link` is the one text button type for a link: it carries the
+`crate-url` face, the `mouse-face`, the `follow-link` rule and a
+default `help-echo`.  A renderer writes `:type 'crate-link` and the
+properties that differ — the `action` and the tooltip — so the
+pointer highlights every link the same way and no call repeats a
+mouse face.  A crate link keeps its own `action` (`find-crate`) and
+keeps `crate-url` for the `thing-at-point` provider.  A URL link
+falls back to the default action (`crate--button-url`), which opens
+the `crate-url` in a browser.
 
 ### Browse table reload
 

@@ -605,6 +605,27 @@ Inherits from `package-description' when available."
      (1 'crate-version)))
   "Font-lock keywords for `crate-mode'.")
 
+;;; Text buttons
+
+;; A link is a text button of the type `crate-link'.  The type carries
+;; the face, the mouse face and the follow link rule, so every link
+;; answers the mouse the same way and a renderer names no mouse face of
+;; its own.  A button that opens a crate keeps its own action, because
+;; only a URL button opens a browser.
+
+(defun crate--button-url (button)
+  "Open the crates.io URL of BUTTON in a browser."
+  (when (integer-or-marker-p button)
+    (goto-char button))
+  (browse-url (button-get button 'crate-url)))
+
+(define-button-type 'crate-link
+  'action #'crate--button-url
+  'face 'crate-url
+  'mouse-face 'highlight
+  'follow-link t
+  'help-echo "Open link")
+
 ;;; Major Mode
 
 ;;;###autoload
@@ -725,9 +746,8 @@ bracketed tag before the name."
                              (downcase (string-replace "_" "-"
                                                        (or (gethash "name" crate-data) crate-name))))))
             (insert-text-button url
+                                :type 'crate-link
                                 'action (lambda (_) (browse-url url))
-                                'follow-link t
-                                'face 'link
                                 'help-echo "Open documentation on docs.rs"))))
       (insert "\n")
       (field "Version:       " "latest_version")
@@ -748,9 +768,8 @@ bracketed tag before the name."
                                (if (eq (nth 3 d) 1) "  (optional)" "")))
                  (pad (- 40 (length dname))))
             (insert-text-button dname
+                                :type 'crate-link
                                 'action (lambda (_) (find-crate dname))
-                                'follow-link t
-                                'face 'crate-url
                                 'help-echo (format "View crate: %s" dname)
                                 'crate-url (concat crate--crates-io-url dname))
             (insert (make-string (max pad 1) ?\s) rest "\n"))))
@@ -759,9 +778,8 @@ bracketed tag before the name."
         (insert "\nDependents:\n")
         (dolist (dname dependents)
           (insert-text-button dname
+                              :type 'crate-link
                               'action (lambda (_) (find-crate dname))
-                              'follow-link t
-                              'face 'crate-url
                               'help-echo (format "View crate: %s" dname)
                               'crate-url (concat crate--crates-io-url dname))
           (insert "\n")))
