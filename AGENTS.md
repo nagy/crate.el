@@ -442,6 +442,15 @@ the variable void and `setq-local` signals in a bare Emacs.  The
 provider only uses text properties at point, so it returns nil on
 any non-button text.
 
+`crate-browse-mode` installs its own provider,
+`crate-browse--thing-at-point-url`, for the `url` thing.  The name
+cell of a row carries `crate-url`, and every other cell answers
+through the entry ID of the row, so `C-c C-o`
+(`browse-url-at-point') follows the crate of any cell.  The name cell
+and not the whole row carries the property, because `equal` on a cell
+and a bare string must stay true, and the export of a row strips the
+properties anyway.
+
 ### One text button type for links
 
 `crate-link` is the one text button type for a link: it carries the

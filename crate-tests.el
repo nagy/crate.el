@@ -649,6 +649,26 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
         (should (equal (aref cols 1) "1.0.188"))
         (should (equal (aref cols 2) "A test crate"))))))
 
+(ert-deftest crate-browse-url-at-point ()
+  "Any cell of a row answers the crates.io URL of its crate."
+  (let ((data (crate-test--data-hash :latest_version "1.0.0"
+                                     :description "framework")))
+    (with-temp-buffer
+      (crate-browse-mode)
+      (setq tabulated-list-entries (list (crate-browse--entry "serde" data)))
+      (tabulated-list-print)
+      (dolist (text '("serde" "framework"))
+        (goto-char (point-min))
+        (should (search-forward text nil t))
+        (goto-char (match-beginning 0))
+        (should (equal (thing-at-point 'url t)
+                       (concat crate--crates-io-url "serde")))))))
+
+(ert-deftest crate-browse-binds-url-at-point ()
+  "`C-c C-o' opens the crates.io page of the row of point."
+  (should (eq (lookup-key crate-browse-mode-map (kbd "C-c C-o"))
+              #'browse-url-at-point)))
+
 (ert-deftest crate-browse-entries ()
   "`crate-browse--entries' generates entries from `crate--list'."
   (let* ((table (crate-test--crate-table

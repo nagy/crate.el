@@ -44,7 +44,8 @@ To enable the browse URL handler:
 
 =M-x crate-browse-crates= opens the table.  =RET= opens the crate at
 point, =o= and =mouse-2= open it in another window, =w= copies a
-=Cargo.toml= dependency line, =b= opens crates.io, and =g= reloads the
+=Cargo.toml= dependency line, =b= opens crates.io, and =C-c C-o= opens
+the crates.io page of the row at point from any cell.  =g= reloads the
 table.  Click a column header to sort by it, and click again to
 reverse the order.
 

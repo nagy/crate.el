@@ -1172,6 +1172,7 @@ and delegates to `find-crate'."
   :doc "Keymap for `crate-browse-mode'."
   :parent tabulated-list-mode-map
   "RET" #'crate-browse-visit
+  "C-c C-o" #'browse-url-at-point
   "o"   #'crate-browse-open-other-window
   "<mouse-2>" #'crate-browse-open-other-window-mouse
   "<follow-link>" #'crate-browse--click-selects-row
@@ -1187,6 +1188,7 @@ and delegates to `find-crate'."
 \\[crate-browse-visit] on an entry to view full details,
 \\[crate-browse-open-other-window] to view them in another window,
 \\[crate-browse-search-url] to open on crates.io,
+\[browse-url-at-point] to open the crates.io page of the row at point,
 \\[crate-browse-widen-column] and \\[crate-browse-narrow-column] to
 resize a column,
 \\[revert-buffer] to reload the data.
@@ -1201,6 +1203,11 @@ The table shrinks its columns when the window is narrow."
          ("Description" 0 nil)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key '("Crate" . nil))
+  ;; Make any cell of a row detectable as the crates.io URL of the
+  ;; crate, so `browse-url-at-point' follows the row of point.
+  (setq-local thing-at-point-provider-alist
+              (cons '(url . crate-browse--thing-at-point-url)
+                    thing-at-point-provider-alist))
   (setq-local crate-browse--declared-widths (crate-browse--column-widths))
   (setq-local crate-browse--canonical-widths crate-browse--declared-widths)
   (tabulated-list-init-header)
@@ -1332,7 +1339,8 @@ lands before \"1.10\".  An entry without a version sorts last."
   (let ((desc (gethash "description" data))
         (version (gethash "latest_version" data)))
     (list name
-          (vector (propertize name 'face 'crate-name-face)
+          (vector (propertize name 'face 'crate-name-face
+                              'crate-url (concat crate--crates-io-url name))
                   (propertize (or version "") 'face 'crate-version)
                   (propertize (if (and desc (not (eq desc :null)))
                                   (string-limit (string-replace "\n" " " desc)
@@ -1372,6 +1380,19 @@ initial display is deterministic (hash iteration order is not)."
   "Return the crate name at point, or signal an error."
   (or (tabulated-list-get-id)
       (user-error "No crate on this line")))
+
+(defun crate-browse--thing-at-point-url ()
+  "Return the crates.io URL of the table row at point.
+Used as a `thing-at-point-provider-alist' entry for
+`crate-browse-mode', so `thing-at-point \='url' and
+`browse-url-at-point' treat any cell of a row as a link to the
+crates.io page of its crate.  The name cell carries the `crate-url'
+property, and every other cell answers through the entry ID of the
+row."
+  (declare (side-effect-free t))
+  (or (crate--thing-at-point-url)
+      (when-let* ((name (tabulated-list-get-id)))
+        (concat crate--crates-io-url name))))
 
 ;;; Mouse and context menu
 
