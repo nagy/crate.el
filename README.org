@@ -15,6 +15,8 @@ Optional on-demand rustdoc builds via Nix for module tree display.
   clickable links, unless =crate-goto-address= is nil
 - A refresh keeps point on the same field, dependency or module item,
   and every window that shows the buffer keeps its own line
+- =TAB= folds the field block, the dependency and dependent lists, or
+  the module tree of a detail buffer
 - =M-x crate-browse-crates= tabulated list view with sorting and bookmarks
 - The Version column sorts as semver (=1.9.0= before =1.10.0=, a
   pre-release before its release) and the columns fit the window;
@@ -39,6 +41,15 @@ To enable the browse URL handler:
 #+begin_src elisp
   (crate-install-browse-url-handler)
 #+end_src
+
+* Crate details
+
+=M-x find-crate= opens the detail buffer.  =TAB= folds or unfolds the
+section around point: the field block, Dependencies, Dependents or
+Modules, and a refresh keeps the folded sections.  A dependency name
+and the URL fields are links, so =RET= on a dependency opens it and
+=RET= on a URL opens the browser.  =w= copies a =Cargo.toml=
+dependency line.
 
 * Browse table
 

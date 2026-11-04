@@ -55,8 +55,10 @@
 
 (require 'bookmark)
 (require 'json)
+(require 'button)
 (require 'cl-lib)
 (require 'goto-addr)
+(require 'outline)
 ;; `thing-at-point-provider-alist' is defined here; crate-mode sets it
 ;; buffer-locally, so the file must be loaded for the variable to exist.
 (require 'thingatpt)
@@ -619,11 +621,20 @@ Inherits from `package-description' when available."
     (goto-char button))
   (browse-url (button-get button 'crate-url)))
 
+(defvar-keymap crate-link-map
+  :doc "Keymap of a text button link.
+Every key comes from `button-map', except TAB: a dependency row is a
+line of the Dependencies section, so TAB folds that section instead
+of moving to the next link."
+  :parent button-map
+  "TAB" #'crate-toggle-section)
+
 (define-button-type 'crate-link
   'action #'crate--button-url
   'face 'crate-url
   'mouse-face 'highlight
   'follow-link t
+  'keymap crate-link-map
   'help-echo "Open link")
 
 ;;; Point keeping
@@ -664,15 +675,18 @@ lines keeps the right one."
 (defun crate--line-identity ()
   "Return the identity of the line of point, or nil.
 The identity is a cons of a kind and a value: `field' and the
-field key, `module' and the path of the item in the module tree,
-`link' and the URL of a crate link, or `text' and a cons of the
-text of the line and its ordinal among the equal lines above it.
-A line of whitespace alone has no identity, because its text would
-match every blank line."
+field key, `section' and the name of the section of a heading,
+`module' and the path of the item in the module tree, `link' and
+the URL of a crate link, or `text' and a cons of the text of the
+line and its ordinal among the equal lines above it.  A line of
+whitespace alone has no identity, because its text would match
+every blank line."
   (declare (side-effect-free t))
   (let ((start (line-beginning-position)))
     (or (when-let* ((key (get-text-property start 'crate-field)))
           (cons 'field key))
+        (when-let* ((section (get-text-property start 'crate-section)))
+          (cons 'section section))
         (when-let* ((path (get-text-property start 'crate-module)))
           (cons 'module path))
         (when-let* ((url (get-text-property start 'crate-url)))
@@ -755,6 +769,7 @@ Return non-nil when the function found that line.  It leaves point
 at `point-min' when it found none."
   (pcase identity
     (`(field . ,key) (crate--goto-property 'crate-field key))
+    (`(section . ,name) (crate--goto-property 'crate-section name))
     (`(module . ,path) (crate--goto-property 'crate-module path))
     (`(link . ,url) (crate--goto-property 'crate-url url))
     (`(text . ,line) (crate--goto-text line))
@@ -812,6 +827,99 @@ dead window stays alone."
                           (or (crate--record-position (cdr record))
                               (point-min)))))))
 
+;;; Sections
+
+;; A detail buffer folds its sections through `outline-minor-mode'.  A
+;; heading is a line that carries the text property `crate-section' with
+;; the name of the section, and `outline-search-function' finds it, so no
+;; heading needs a special character in the text.  Every section is a top
+;; level section, so `outline-level' answers one for each of them.
+
+(defun crate--section (text name)
+  "Return TEXT as the text of the section heading named NAME.
+The heading carries `crate-section' with NAME, so the outline search
+of `crate-mode' finds it and a render restores a fold by name."
+  (declare (pure t) (side-effect-free t))
+  (propertize text 'crate-section name))
+
+(defun crate--outline-search (&optional bound move backward looking-at)
+  "Search for the next text property `crate-section'.
+BOUND, MOVE, BACKWARD and LOOKING-AT have the meaning that
+`outline-search-function' documents."
+  (outline-search-text-property 'crate-section nil bound move backward
+                                looking-at))
+
+(defun crate--section-headings ()
+  "Return the start of every section heading of the current buffer.
+The positions come in buffer order."
+  (declare (side-effect-free t))
+  (let (headings
+        (position (point-min)))
+    (save-excursion
+      (while (< position (point-max))
+        (when (get-text-property position 'crate-section)
+          (push position headings))
+        (setq position (or (next-single-property-change
+                            position 'crate-section nil (point-max))
+                           (point-max)))))
+    (nreverse headings)))
+
+(defun crate--collapsed-sections ()
+  "Return the names of the folded sections of the current buffer.
+`crate--render' reads this before it erases the buffer, so a refresh
+keeps the fold of a reader."
+  (when (bound-and-true-p outline-minor-mode)
+    (let (names)
+      (dolist (heading (crate--section-headings))
+        (save-excursion
+          (goto-char heading)
+          (when (outline-invisible-p (line-end-position))
+            (push (get-text-property heading 'crate-section) names))))
+      names)))
+
+(defun crate--hide-section (name)
+  "Fold the section NAME of the current buffer when it is present."
+  (when-let* ((heading (seq-find
+                        (lambda (position)
+                          (equal (get-text-property position 'crate-section)
+                                 name))
+                        (crate--section-headings)))
+              (inhibit-read-only t))
+    (save-excursion
+      (goto-char heading)
+      (outline-hide-subtree))))
+
+(defun crate--restore-sections (names)
+  "Fold the sections of NAMES in the current buffer."
+  (dolist (name names)
+    (crate--hide-section name)))
+
+(defun crate--enclosing-section ()
+  "Return the start of the heading line of the section around point.
+Return nil when point sits above the first section."
+  (declare (side-effect-free t))
+  (save-excursion
+    (beginning-of-line)
+    (if (get-text-property (point) 'crate-section)
+        (point)
+      (when (outline-previous-heading)
+        (point)))))
+
+(defun crate-toggle-section ()
+  "Fold or unfold the section of the crate details at point.
+The command works on every line of a section, not only on the line
+that shows its heading, so a reader folds a long dependency list from
+the middle of it, and point ends on its heading line.  A render
+keeps the folded sections."
+  (interactive nil crate-mode)
+  (unless (derived-mode-p 'crate-mode)
+    (user-error "Not a crate detail buffer"))
+  (let ((heading (crate--enclosing-section)))
+    (unless heading
+      (user-error "No crate section at point"))
+    (goto-char heading)
+    (outline-toggle-children)))
+
 ;;; Major Mode
 
 ;;;###autoload
@@ -826,6 +934,7 @@ unless point is on text carrying a `crate-url' property."
 (defvar-keymap crate-mode-map
   :doc "Keymap for `crate-mode'."
   :parent special-mode-map
+  "TAB" #'crate-toggle-section
   "w" #'crate-copy-dependency)
 
 (define-derived-mode crate-mode special-mode "Crate"
@@ -834,11 +943,28 @@ unless point is on text carrying a `crate-url' property."
 \\{crate-mode-map}
 This mode is not intended to be invoked directly; use
 `find-crate' instead.  The buffer content is inserted by
-`crate--render' after the mode is set up."
+`crate--render' after the mode is set up.
+
+\[crate-toggle-section] folds or unfolds the section of point, and a
+render keeps the folded sections."
   (setq-local default-directory temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (when crate-goto-address
     (goto-address-mode 1))
+  ;; A heading line carries `crate-section', so the outline search finds
+  ;; it and no heading needs a special character in the text.  Every
+  ;; section is a top level section, so the level answers one.  The
+  ;; faces of the renderer stay, because the heading already carries
+  ;; its own face.
+  (setq-local outline-search-function #'crate--outline-search)
+  (setq-local outline-level (lambda () 1))
+  (setq-local outline-minor-mode-highlight nil)
+  ;; TAB stays with `crate-toggle-section', and a heading gains no
+  ;; glyph, so a version that cycles on TAB or draws a button changes
+  ;; no behavior.
+  (setq-local outline-minor-mode-cycle nil)
+  (setq-local outline-minor-mode-use-buttons nil)
+  (outline-minor-mode 1)
   (setq-local bookmark-make-record-function #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'crate--revert)
   ;; Make dependency crate names detectable as crates.io URLs by
@@ -865,12 +991,14 @@ fallback), dependency buttons, and the rustdoc module tree.
 Erases existing content first, so re-rendering is idempotent.
 Keeps point on the line that it was on before the render, by the
 identity of that line, and keeps its column.  Every other window
-that shows the buffer keeps the line of its own point too."
+that shows the buffer keeps the line of its own point too.  A folded
+section stays folded."
   ;; The record of the line of point comes before the erase, because
   ;; the erase removes the text that both the identity and the window
   ;; point markers point into.
   (let ((record (crate--point-record))
-        (windows (crate--window-records)))
+        (windows (crate--window-records))
+        (collapsed (crate--collapsed-sections)))
     ;; Bind `inhibit-read-only' for the whole render: the buffer may
     ;; already be read-only from a previous render.
     (let ((inhibit-read-only t))
@@ -914,7 +1042,8 @@ render keeps point on the item."
                      (insert (propertize (concat " — " docs)
                                          'face 'crate-description)))
                    (insert "\n")))))))
-      (insert (propertize "Name:          " 'crate-field 'name))
+      (insert (propertize "Name:          " 'crate-field 'name
+                          'crate-section 'fields))
       (insert (or (gethash "name" crate-data) crate-name) "\n")
       (insert (propertize "Description:   " 'crate-field 'description))
       (insert (crate--description))
@@ -959,7 +1088,7 @@ render keeps point on the item."
       (field "Updated:       " "updated_at")
       ;; Dependencies from the crate's default version.
       (when-let* ((deps (crate--deps crate-name)))
-        (insert "\nDependencies:\n")
+        (insert "\n" (crate--section "Dependencies:" 'dependencies) "\n")
         (dolist (d deps)
           (let* ((dname (nth 0 d))
                  (kind (nth 2 d))
@@ -975,7 +1104,7 @@ render keeps point on the item."
             (insert (make-string (max pad 1) ?\s) rest "\n"))))
       ;; Reverse dependencies: who depends on this crate.
       (when-let* ((dependents (crate--dependents crate-name)))
-        (insert "\nDependents:\n")
+        (insert "\n" (crate--section "Dependents:" 'dependents) "\n")
         (dolist (dname dependents)
           (insert-text-button dname
                               :type 'crate-link
@@ -987,7 +1116,7 @@ render keeps point on the item."
       (let ((doc-json (crate-doc--json crate-name)))
         (cond
          (doc-json
-          (insert "Modules:\n")
+          (insert (crate--section "Modules:" 'modules) "\n")
           (insert-doc-tree (crate-doc--module-tree doc-json) 0 ""))
          ((gethash (list crate-name crate-data-path) crate-doc--cache)
           (insert "Modules: (rustdoc unavailable)\n"))
@@ -998,7 +1127,8 @@ render keeps point on the item."
       (font-lock-ensure)
       (set-buffer-modified-p nil))
     (crate--restore-point record)
-    (crate--restore-window-points windows))))
+    (crate--restore-window-points windows)
+    (crate--restore-sections collapsed))))
 
 
 ;;; Completion

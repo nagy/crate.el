@@ -114,12 +114,14 @@ is nil. Callers must use `(cadddr item)` to get docs:
 5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
    `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Text Buttons and Point Keeping (`crate-link` button type,
+7. Text Buttons, Sections and Point Keeping (`crate-link` button
+   type, the `crate-section` headings and `crate-toggle-section`,
    `crate--line-identity` and the restore helpers, which keep point
    across the erase of a render)
 8. Major Mode (`crate-mode`, derived from `special-mode` for
-   read-only + `q`/`g` conventions, thin: only
-   `setq-local` for font-lock defaults, bookmark record function, and
+   read-only + `q`/`g` conventions, thin: only `setq-local` for
+   font-lock defaults, `goto-address-mode`, the outline heading
+   search and `outline-level`, the bookmark record function, and
    `revert-buffer-function`; content is inserted by `crate--render`,
    which uses the `crate-name` / `crate-data` buffer-locals)
 9. Completion (`crate--match-names`, `crate--annotate`,
@@ -395,8 +397,9 @@ misleads.
 before the render and restores it after the render
 (`crate--point-record`, `crate--restore-point`).  The record names
 the line and not a buffer position: `crate-field` (a field key),
-`crate-module` (the path of an item in the module tree), `crate-url`
-(the URL of a crate link) or, for a line without such an identity,
+`crate-section` (the name of a section), `crate-module` (the path of
+an item in the module tree), `crate-url` (the URL of a crate link) or,
+for a line without such an identity,
 the text of the line and its ordinal among the equal lines above it
 (`crate--line-occurrence`).  A blank line leans on the nearest line
 above that has an identity, and the column travels with the line, so
@@ -413,6 +416,34 @@ renderer, a branch in `crate--line-identity` and a branch in
 `crate--goto-identity`.  `crate--goto-property` compares the value
 with `equal` and not with `eq`, because a re-render makes a new
 string object for a property that spells the same text.
+
+### Sections and folds
+
+`crate--render` tags each heading line with `crate-section`: the Name
+line heads the field block, and the Dependencies, Dependents and
+Modules lines head themselves.  `crate-mode` enables
+`outline-minor-mode` and sets `outline-search-function` to
+`crate--outline-search`, which searches for the text property, so no
+heading needs a marker character in the text.  `outline-level`
+answers one for every section, because every section is a top level
+section, and `outline-minor-mode-highlight` stays nil, so the face of
+the renderer survives.  `outline-minor-mode-cycle` and
+`outline-minor-mode-use-buttons` are nil buffer-locally, so an Emacs
+version that cycles on TAB or draws an arrow on a heading keeps TAB
+with `crate-toggle-section` and adds no glyph to the text.
+
+`crate-toggle-section` (`TAB`) folds the section around point from
+any line of the section and leaves point on the heading line.  The
+`crate-link-map` of the `crate-link` button type parents `button-map`
+and rebinds TAB, because a dependency row is both a button and a line
+of the Dependencies section, and the `keymap` text property of a
+button would otherwise win over `crate-mode-map`.
+
+`crate--render` reads the folded sections before it erases the buffer
+(`crate--collapsed-sections`) and folds them again after the render
+(`crate--restore-sections`).  The fold restore comes after the point
+restore, because `search-invisible` is nil and a text search cannot
+reach a line inside a folded section.
 
 ### `thing-at-point` URL provider for dependency names
 
@@ -636,6 +667,7 @@ against it in the `when-let*` binding, not in the body:
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | goto-addr | yes | built-in, links the URLs of a detail buffer |
+| outline | yes | built-in, folds the sections of a detail buffer |
 | nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `nix/crate-doc.nix` for on-demand rustdoc JSON |
 
 ## TODO

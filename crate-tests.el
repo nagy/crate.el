@@ -1590,6 +1590,90 @@ Substituted at build time by default.nix.")
             (delete-window other)))
       (kill-buffer buffer))))
 
+(ert-deftest crate-mode-render-tags-sections ()
+  "Every section of a detail buffer carries its heading name.
+The Name line heads the field block, and the dependency, dependent
+and module lists head themselves."
+  (let ((crate--data-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents)
+               (lambda (_name) '("tokio")))
+              ((symbol-function 'crate-doc--json) (lambda (_name) :json))
+              ((symbol-function 'crate-doc--module-tree)
+               (lambda (_json)
+                 '(("root" module (("zed" struct nil nil)) nil)))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (should (equal (mapcar (lambda (position)
+                                   (get-text-property position 'crate-section))
+                                 (crate--section-headings))
+                         '(fields dependencies dependents modules))))))))
+
+(ert-deftest crate-toggle-section-folds-the-section-of-point ()
+  "TAB folds the section around point from a line of its body."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate"
+                                                     :license "MIT")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "MIT")
+          (beginning-of-line)
+          (let ((line (point)))
+            (crate-toggle-section)
+            (should (equal (crate--collapsed-sections) '(fields)))
+            (should (outline-invisible-p line))
+            (should (looking-at-p "Name:"))
+            (crate-toggle-section)
+            (should-not (crate--collapsed-sections))
+            (should-not (outline-invisible-p line))))))))
+
+(ert-deftest crate-mode-render-restores-folds ()
+  "A render keeps the folded sections of a reader."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (crate-toggle-section)
+          (should (equal (crate--collapsed-sections) '(fields)))
+          (crate--render)
+          (should (equal (crate--collapsed-sections) '(fields))))))))
+
+(ert-deftest crate-mode-binds-toggle-section ()
+  "TAB folds the section of point, over a link as well as over text."
+  (should (eq (lookup-key crate-mode-map (kbd "TAB"))
+              #'crate-toggle-section))
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "serde")
+          (goto-char (match-beginning 0))
+          ;; The button keymap of the link keeps RET, and TAB folds.
+          (should (eq (key-binding (kbd "TAB")) #'crate-toggle-section))
+          (should (eq (key-binding (kbd "RET")) #'push-button)))))))
+
 (ert-deftest crate-mode-links-are-one-button-type ()
   "Every link of a detail buffer is a `crate-link' button.
 The type carries the mouse face, so the pointer highlights a
