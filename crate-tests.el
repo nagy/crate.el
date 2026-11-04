@@ -28,6 +28,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'thingatpt)
+(require 'browse-url)
 
 
 ;;; Helpers
@@ -1589,6 +1590,58 @@ Substituted at build time by default.nix.")
                   (should (= (point) (point-min)))))
             (delete-window other)))
       (kill-buffer buffer))))
+
+(ert-deftest crate-mode-open-link ()
+  "RET follows the link at point and signals on plain text."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (seen nil))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'find-crate)
+               (lambda (name) (push name seen))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "serde")
+          (goto-char (match-beginning 0))
+          (crate-open-at-point)
+          (should (equal seen '("serde")))
+          (goto-char (point-min))
+          (should-error (crate-open-at-point) :type 'user-error))))))
+
+(ert-deftest crate-mode-open-url-link ()
+  "RET on a URL of a detail buffer opens a browser."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (crate-goto-address t)
+        (opened nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'browse-url)
+               (lambda (url &rest _args) (setq opened url))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash
+                               :name "test-crate"
+                               :homepage "https://example.com/")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-address-fontify)
+          (goto-char (point-min))
+          (search-forward "https://example.com/")
+          (goto-char (match-beginning 0))
+          (crate-open-at-point)
+          (should (equal opened "https://example.com/")))))))
+
+(ert-deftest crate-mode-binds-open-at-point ()
+  "RET follows a link in a detail buffer."
+  (should (eq (lookup-key crate-mode-map (kbd "RET"))
+              #'crate-open-at-point)))
 
 (ert-deftest crate-mode-render-tags-sections ()
   "Every section of a detail buffer carries its heading name.

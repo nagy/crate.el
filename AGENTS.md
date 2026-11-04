@@ -122,8 +122,10 @@ is nil. Callers must use `(cadddr item)` to get docs:
    read-only + `q`/`g` conventions, thin: only `setq-local` for
    font-lock defaults, `goto-address-mode`, the outline heading
    search and `outline-level`, the bookmark record function, and
-   `revert-buffer-function`; content is inserted by `crate--render`,
-   which uses the `crate-name` / `crate-data` buffer-locals)
+   `revert-buffer-function`; `crate-open-at-point` follows a link at
+   point and `crate-toggle-section` folds a section; content is
+   inserted by `crate--render`, which uses the `crate-name` /
+   `crate-data` buffer-locals)
 9. Completion (`crate--match-names`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
 10. Marginalia (`crate--marginalia-annotator`, registered for
@@ -390,6 +392,13 @@ an evaporating overlay that carries the mouse face, the `RET` and
 `mouse-face` on a URL, because an overlay survives re-fontification
 and a text property that hints at a link without an action only
 misleads.
+
+`crate-open-at-point` follows the button at point, which is a crate
+link or a `goto-address` URL overlay, and `RET` in `crate-mode-map`
+runs it.  The `keymap` text property of a link and the overlay of
+`goto-address` still win over the major mode map at a link, so the
+command mainly gives a plain text line a clear "No link at point"
+error instead of a read-only edit error.
 
 ### Point keeping across a render
 

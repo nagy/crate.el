@@ -931,9 +931,19 @@ dependency crate name as a link to its crates.io page.  Returns nil
 unless point is on text carrying a `crate-url' property."
   (get-text-property (point) 'crate-url))
 
+(defun crate-open-at-point ()
+  "Open the link at point.
+A dependency crate name opens that crate, and a URL opens a browser.
+Signal a `user-error' when point is on no link."
+  (interactive)
+  (unless (button-at (point))
+    (user-error "No link at point"))
+  (push-button))
+
 (defvar-keymap crate-mode-map
   :doc "Keymap for `crate-mode'."
   :parent special-mode-map
+  "RET" #'crate-open-at-point
   "TAB" #'crate-toggle-section
   "w" #'crate-copy-dependency)
 
@@ -945,8 +955,10 @@ This mode is not intended to be invoked directly; use
 `find-crate' instead.  The buffer content is inserted by
 `crate--render' after the mode is set up.
 
-\[crate-toggle-section] folds or unfolds the section of point, and a
-render keeps the folded sections."
+\[crate-open-at-point] follows the link at point, which is a
+dependency crate name or a URL.  \[crate-toggle-section] folds or
+unfolds the section of point, and a render keeps the folded
+sections."
   (setq-local default-directory temporary-file-directory)
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   (when crate-goto-address
