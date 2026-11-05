@@ -1,4 +1,4 @@
-;;; crate.el --- Rust crates -*- lexical-binding: t -*-
+;;; crate.el --- Browse Rust crates offline -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025-2026  Daniel Nagy
 
@@ -68,8 +68,10 @@
 (defvar browse-url-default-handlers)
 (defvar thing-at-point-provider-alist)
 
-(defvar-local crate-name nil)
-(defvar-local crate-data nil)
+(defvar-local crate-name nil
+  "Name of the crate that the current buffer shows.")
+(defvar-local crate-data nil
+  "Record of the crate that the current buffer shows.")
 
 (defgroup crate nil
   "Browse Rust crates from a local SQLite database."
@@ -79,7 +81,6 @@
 
 (defcustom crate-data-path nil
   "Path to a crates-io.db SQLite database.
-
 The database should contain a `crates' table with columns:
 name, display_name, description, documentation, homepage,
 repository, created_at, updated_at.
@@ -155,7 +156,6 @@ and returns a directory path."
 
 (defcustom crate-visit-hook nil
   "Hook run after `find-crate' opens a crate detail buffer.
-
 Runs in the Crate: <name> buffer, after `crate-name' and
 `crate-data' have been set (and the buffer rendered).  This is the
 single place all entry points converge: interactive `find-crate',
@@ -177,7 +177,7 @@ button of `crate-browse-mode' bind this option for one call."
   :group 'crate)
 
 (defcustom crate-goto-address t
-  "Whether a detail buffer links the URLs in its text.
+  "Non-nil if a detail buffer links the URLs in its text.
 When non-nil, `goto-address-mode' turns the homepage, repository
 and documentation URL of a crate into a link, so a click and RET
 open it.  Set it to nil to keep the URLs as plain text."
@@ -200,7 +200,8 @@ selected window.")
 
 ;;; Cache
 
-(defvar crate--data-cache (make-hash-table :test #'equal))
+(defvar crate--data-cache (make-hash-table :test #'equal)
+  "Cache of crate data keyed by database path.")
 
 (defun crate--list ()
   "Load crate data from the SQLite database at `crate-data-path'.
@@ -990,14 +991,12 @@ sections."
 
 (defun crate--revert (&optional _ignore-auto _noconfirm _preserve-modes)
   "Re-render the current crate buffer.
-
 `revert-buffer-function' for `crate-mode'.  Re-renders from the
 live `crate-name' / `crate-data' buffer-locals so `g' works."
   (crate--render))
 
 (defun crate--render ()
   "Render the current crate detail buffer.
-
 Inserts the fields for `crate-data' (with `crate-name' as
 fallback), dependency buttons, and the rustdoc module tree.
 Erases existing content first, so re-rendering is idempotent.
@@ -1176,7 +1175,7 @@ escaped via `crate--sql-like-escape'."
       (error nil))))
 
 (defun crate--annotate (candidate)
-  "Completion annotation function for crate CANDIDATE."
+  "Return the completion annotation for crate CANDIDATE."
   (let* ((table (crate--list))
          (data (when table
                  (gethash (crate--canonical-name candidate) table)))
@@ -1188,7 +1187,7 @@ escaped via `crate--sql-like-escape'."
                             crate-annotation-width)))))
 
 (defun crate--collection (string predicate action)
-  "Completion collection for crates.
+  "Return the completion collection for crates.
 See `completing-read' for the meaning of STRING, PREDICATE and
 ACTION."
   (pcase action
@@ -1399,7 +1398,7 @@ replace it with the widths that it saved.")
 
 (defconst crate--version-re
   "\\`\\([0-9]+\\)\\(?:\\.\\([0-9]+\\)\\)?\\(?:\\.\\([0-9]+\\)\\)?\\(?:-\\([^+]+\\)\\)?\\(?:\\+.*\\)?\\'"
-  "Regexp splitting a version string into its numeric and pre-release parts.
+  "Regexp that splits a version string into its numeric and pre-release parts.
 The minor and patch groups are optional, because a few old crates
 publish a two-segment version such as \"0.1\".")
 
@@ -2013,13 +2012,12 @@ added crates appear on reopen."
 ;;;###autoload
 (defun crate-browse-crates (&optional name-list name-prefix)
   "Display Rust crates in a browseable table.
-
 When NAME-LIST is non-nil (a list of names), only those crates
 are displayed.  This is used by Embark export.
 
-When NAME-PREFIX is non-nil, it is appended to the buffer name
-(e.g. \"*Crates: serde*\"), allowing multiple searches to
-coexist in separate buffers."
+When NAME-PREFIX is non-nil, the buffer name gets the form
+\"*Crates: serde*\", allowing multiple searches to coexist
+in separate buffers."
   (interactive)
   (let* ((buf-name (if name-prefix
                        (format "*Crates: %s*" name-prefix)
@@ -2047,7 +2045,7 @@ empty string when the version is unknown, which becomes \"*\"."
             "*")))
 
 (defun crate-copy-dependency (&optional name)
-  "Copy a Cargo.toml dependency line for crate NAME to the kill-ring.
+  "Copy a Cargo.toml dependency line for crate NAME to the `kill-ring'.
 The line has the form NAME = \"VERSION\", ready to paste into a
 `[dependencies]' section.  When the version cannot be determined,
 it falls back to \"*\".  Interactively, NAME is the current crate
@@ -2121,7 +2119,7 @@ itself stays silent outside TOML modes and dependency sections."
 (defvar embark-general-map)
 
 (defun crate--embark-export (candidates)
-  "Embark export function for crate CANDIDATES.
+  "Export crate CANDIDATES for Embark.
 Opens a `crate-browse-mode' buffer filtered to CANDIDATES.
 Grabs the minibuffer search term as the name-prefix so bookmarks
 can re-derive results from the live cache."

@@ -75,7 +75,7 @@
 (defvar crate-name)
 
 (defcustom crate-evil-auto-enable t
-  "Whether to install the evil bindings without an explicit call.
+  "Non-nil if the evil bindings load without an explicit call.
 When non-nil, `crate-evil-auto-setup' enables `crate-evil-mode' when
 evil loads.  Set this option to nil before evil loads to keep the
 bindings off until a user calls `crate-evil-mode'."

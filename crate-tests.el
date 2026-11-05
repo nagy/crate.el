@@ -23,6 +23,8 @@
 ;;
 ;; Then: M-x ert RET crate
 
+;;; Code:
+
 (require 'crate)
 (require 'ol-crate)
 (require 'ert)
@@ -666,7 +668,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
                        (concat crate--crates-io-url "serde")))))))
 
 (ert-deftest crate-browse-binds-url-at-point ()
-  "`C-c C-o' opens the crates.io page of the row of point."
+  "`browse-url-at-point' opens the crates.io page of the row of point."
   (should (eq (lookup-key crate-browse-mode-map (kbd "C-c C-o"))
               #'browse-url-at-point)))
 
