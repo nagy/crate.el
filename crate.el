@@ -19,6 +19,7 @@
 ;; Author: Daniel Nagy
 ;; Version: 0.1.0
 ;; Keywords: tools
+;; URL: https://github.com/nagy/crate.el
 ;; Package-Requires: ((emacs "30.1"))
 
 ;;; Commentary:
@@ -923,7 +924,6 @@ keeps the folded sections."
 
 ;;; Major Mode
 
-;;;###autoload
 (defun crate--thing-at-point-url ()
   "Return the crates.io URL for a dependency crate name at point.
 Used as a `thing-at-point-provider-alist' entry for `crate-mode'
@@ -1656,7 +1656,7 @@ copy a column before it changes."
                     widths)))
 
 (defun crate-browse--longest-cell (entries column)
-  "Return the width of the widest COLUMN cell of ENTRIES.
+  "Return the width of the widest cell of ENTRIES in COLUMN.
 ENTRIES has the shape of `tabulated-list-entries'."
   (declare (pure t) (side-effect-free t))
   (let ((longest 0))
@@ -1906,7 +1906,7 @@ the visible data."
             "\n")))
 
 (defun crate-browse--export-buffer (label text)
-  "Show TEXT in a read-only export buffer named for LABEL.
+  "Show the export LABEL with TEXT in a read-only buffer.
 A repeat export of the same format reuses the buffer."
   (let ((buffer (get-buffer-create (format "*Crates export: %s*" label))))
     (with-current-buffer buffer

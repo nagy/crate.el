@@ -12,11 +12,15 @@
   # explicitly so the expression has no hidden dependency on a peer
   # file; the flake wires up nix/test-crates-db.nix.
   testCratesDb,
+  # Version string.  The flake derives it from the commit date, so the
+  # expression stays standalone-usable (nix-build nix/default.nix) with
+  # the default.
+  version ? "0.1.0",
 }:
 
 melpaBuild {
   pname = "crate";
-  version = "0.1.0";
+  inherit version;
   # `./..' is the repo root: this expression lives in nix/ but the
   # package sources and tests sit one level up.
   src = lib.cleanSource ./..;
@@ -33,25 +37,45 @@ melpaBuild {
     export EMACSLOADPATH="$evil_dir:''${EMACSLOADPATH-}"
   '';
 
-  # Bake the store path of the fixture database into the test suite.
+  # Two substitutions, both only visible inside the build:
+  # * the fixture database path, so the suite need not reach for a
+  #   hard-coded path;
+  # * the version in the package header, which must agree with the
+  #   `version' argument or `require' and package.el disagree after
+  #   installation.  The pattern spells the header default, so a bump
+  #   of `0.1.0' above changes both places.
   postPatch = ''
-    substituteInPlace crate-tests.el \
+    substituteInPlace test/crate-test.el \
       --replace-fail '@testCratesDb@' ${testCratesDb}
+    substituteInPlace crate.el \
+      --replace-fail ';; Version: 0.1.0' ';; Version: ${version}'
   '';
 
   checkPhase = ''
     runHook preCheck
-    for f in crate.el ol-crate.el crate-tests.el \
-             evil-crate.el evil-crate-tests.el; do
-      emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+
+    # Byte-compile every file with warnings as errors, test files
+    # included: `turnCompilationWarningToError' only covers the files
+    # melpaBuild installs.
+    for f in *.el test/*.el; do
+      emacs --batch -L . -L test --eval '(setq byte-compile-error-on-warn t)' \
         -f batch-byte-compile "$f"
     done
-    emacs --batch -L . \
-      -l crate-tests.el \
+
+    # Load every suite through a glob, so a new `test/<unit>-test.el'
+    # needs no edit here.  printf repeats "-l %s" per match.  failglob
+    # makes an empty glob a shell error, so the || guard fires even
+    # without `set -e'; the default returns right after, because later
+    # commands must keep default glob semantics.  The unquoted
+    # $test_args is intentional: the words must split back into
+    # -l <file> pairs.
+    shopt -s failglob
+    test_args=$(printf -- "-l %s " test/*-test.el) || { echo 'no tests matched test/*-test.el' >&2; exit 1; }
+    shopt -u failglob
+    emacs --batch -L . -L test \
+      $test_args \
       -f ert-run-tests-batch-and-exit
-    emacs --batch -L . \
-      -l evil-crate-tests.el \
-      -f ert-run-tests-batch-and-exit
+
     runHook postCheck
   '';
 

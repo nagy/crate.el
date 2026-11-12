@@ -1,4 +1,4 @@
-;;; crate-tests.el --- Tests for crate -*- lexical-binding: t -*-
+;;; crate-test.el --- Tests for crate -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025-2026  Daniel Nagy
 
@@ -18,10 +18,8 @@
 
 ;; To run these tests:
 ;;
-;;   (require 'crate)
-;;   (require 'ert)
-;;
-;; Then: M-x ert RET crate
+;;   emacs --batch -L . -L test -l test/crate-test.el \
+;;     -f ert-run-tests-batch-and-exit
 
 ;;; Code:
 
@@ -31,88 +29,9 @@
 (require 'cl-lib)
 (require 'thingatpt)
 (require 'browse-url)
-
-
-;;; Helpers
-
-(defun crate-test--sqlite-db (&rest entries)
-  "Create a temporary SQLite database with mock crate data.
-ENTRIES are (KEY . PLIST) pairs where PLIST contains keyword-value
-pairs like :description \"foo\".  Returns the path to the .db file."
-  (let ((dbpath (make-temp-file "crate-test-" nil ".db"))
-        db)
-    (setq db (sqlite-open dbpath))
-    (sqlite-execute db "CREATE TABLE crates (
-  name TEXT PRIMARY KEY,
-  display_name TEXT NOT NULL,
-  description TEXT,
-  documentation TEXT,
-  homepage TEXT,
-  repository TEXT,
-  created_at TEXT,
-  updated_at TEXT,
-  latest_version TEXT,
-  license TEXT,
-  downloads INTEGER NOT NULL DEFAULT 0,
-  trustpub_only INTEGER NOT NULL DEFAULT 0
-) STRICT, WITHOUT ROWID")
-    (sqlite-execute db "CREATE TABLE dependencies (
-  id INTEGER PRIMARY KEY,
-  crate_name TEXT NOT NULL,
-  dep_name TEXT NOT NULL,
-  req TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'normal',
-  optional INTEGER NOT NULL DEFAULT 0
-) STRICT")
-    (dolist (e entries)
-      (let* ((plist (cdr e))
-             (name (car e))
-             (desc (plist-get plist :description))
-             (homepage (plist-get plist :homepage))
-             (documentation (plist-get plist :documentation))
-             (repository (plist-get plist :repository))
-             (created_at (plist-get plist :created_at))
-             (updated_at (plist-get plist :updated_at))
-             (version (plist-get plist :latest_version))
-             (license (plist-get plist :license))
-             (downloads (or (plist-get plist :downloads) 0)))
-        (sqlite-execute db "INSERT INTO crates VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
-                        (list name name desc documentation homepage
-                              repository created_at updated_at
-                              version license downloads 0))))
-    (sqlite-close db)
-    dbpath))
-
-(defun crate-test--data-hash (&rest props)
-  "Build a hash table of mock crate field data.
-PROPS are alternating keyword-value pairs like :description \"foo\".
-Keyword keys are converted to strings by stripping the leading colon.
-Returns a hash table suitable for binding to `crate-data'."
-  (let ((table (make-hash-table :test 'equal)))
-    (cl-loop for (prop val) on props by #'cddr
-             do (puthash (substring (symbol-name prop) 1) val table))
-    table))
-
-(cl-defun crate-test--crate-table (&rest entries)
-  "Build a hash table of mock crate data keyed by crate name.
-ENTRIES are (KEY . PLIST) pairs where PLIST contains keyword-value
-pairs like :description \"foo\".  Returns a hash table suitable as
-the return value of `crate--list'."
-  (let ((table (make-hash-table :test 'equal)))
-    (dolist (e entries table)
-      (let ((inner (make-hash-table :test 'equal)))
-        (cl-loop for (prop val) on (cdr e) by #'cddr
-                 do (puthash (substring (symbol-name prop) 1) val inner))
-        (puthash (car e) inner table)))))
-
-(defmacro crate-test--with-crate (name data &rest body)
-  "Evaluate BODY with `crate-name' bound to NAME and `crate-data' to DATA.
-DATA should be a hash table of field keys to values (the inner
-record, not the top-level crate table)."
-  (declare (indent 2))
-  `(let ((crate-name ,name)
-         (crate-data ,data))
-     ,@body))
+;; Fixtures live in a `*-test-helper.el' file, which the glob loader
+;; skips, so pull it in by name.
+(require 'crate-test-helper)
 
 
 ;;; Unit tests
@@ -350,12 +269,12 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
               ((symbol-function 'sqlite-open) #'ignore)
               ((symbol-function 'sqlite-select)
-               (lambda (&rest _) (error "query failed")))
+               (lambda (&rest _) (error "Query failed")))
               ((symbol-function 'sqlite-close) #'ignore))
       (should-not (crate--deps "serde"))
       (let ((calls 0))
         (cl-letf (((symbol-function 'sqlite-select)
-                   (lambda (&rest _) (cl-incf calls) (error "query failed"))))
+                   (lambda (&rest _) (cl-incf calls) (error "Query failed"))))
           (should-not (crate--deps "serde"))
           (should (= calls 0)))))))
 
@@ -369,7 +288,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
               ((symbol-function 'sqlite-open) #'ignore)
               ((symbol-function 'sqlite-select)
-               (lambda (&rest _) (error "query failed")))
+               (lambda (&rest _) (error "Query failed")))
               ((symbol-function 'sqlite-close)
                (lambda (&rest _) (cl-incf closed))))
       (should-not (crate--list))
@@ -383,7 +302,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
               ((symbol-function 'sqlite-open) #'ignore)
               ((symbol-function 'sqlite-select)
-               (lambda (&rest _) (error "query failed")))
+               (lambda (&rest _) (error "Query failed")))
               ((symbol-function 'sqlite-close)
                (lambda (&rest _) (cl-incf closed))))
       (should-not (crate--deps "serde"))
@@ -1038,7 +957,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
         (crate-browse--window-size-changed (selected-frame))
         (should-not (buffer-local-value 'crate-browse--fit-timer buffer))))))
 
-(ert-deftest find-crate-switches-buffer-by-default ()
+(ert-deftest crate-find-crate-switches-buffer-by-default ()
   "A nil `crate-display-buffer-action' keeps `switch-to-buffer'."
   (let ((crate-display-buffer-action nil)
         (crate--data-cache (make-hash-table :test 'equal))
@@ -1057,7 +976,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
     (should switched)
     (should-not popped)))
 
-(ert-deftest find-crate-honors-display-buffer-action ()
+(ert-deftest crate-find-crate-honors-display-buffer-action ()
   "`find-crate' routes a display action to `pop-to-buffer'."
   (let ((crate-display-buffer-action crate--other-window-action)
         (crate--data-cache (make-hash-table :test 'equal))
@@ -2138,7 +2057,7 @@ The negative result is cached as `:failed' so renders don't re-probe."
                        (set-buffer (get-buffer-create bufname))))
                     ((symbol-function 'executable-find) (lambda (_) nil))
                     ((symbol-function 'make-process)
-                     (lambda (&rest _) (error "must not spawn"))))
+                     (lambda (&rest _) (error "Must not spawn"))))
             (find-crate "serde")
             (let ((buf (get-buffer "Crate: serde")))
               (should buf)
@@ -2257,5 +2176,5 @@ callers must filter them by checking for :null."
     ;; ID 99 is dangling: item 1 survives, dangling entry is dropped.
     (should (= (length tree) 1))
     (should (equal (car (car tree)) "foo"))))
-(provide 'crate-tests)
-;;; crate-tests.el ends here
+(provide 'crate-test)
+;;; crate-test.el ends here

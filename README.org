@@ -99,6 +99,30 @@ of a full crates.io dump on every resize would stall.  Set =crate-display-buffer
 =crate--other-window-action= to open every crate beside the buffer
 that you started from.
 
+* Development
+
+The flake builds the package and runs every check:
+
+#+begin_src sh
+  nix build        # the package at result/
+  nix flake check  # build, both ERT suites and the lint gate
+#+end_src
+
+The ERT suites live in =test/=, one file per source unit, named
+=<unit>-test.el=.  Shared fixtures live in =test/crate-test-helper.el=,
+and the Nix checkPhase loads the suites through a =test/*-test.el= glob.
+Run one suite in a plain shell with:
+
+#+begin_src sh
+  emacs --batch -L . -L test -l test/crate-test.el \
+    -f ert-run-tests-batch-and-exit
+#+end_src
+
+=checks.lint= runs checkdoc and package-lint over the package files and
+the test files, so a docstring or header problem fails =nix flake check=.
+The package version is =0.1.0-unstable-<commit date>=, derived from the
+flake source info.
+
 * License
 
 [[./LICENSE][AGPL3+]]

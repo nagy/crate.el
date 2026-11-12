@@ -11,15 +11,22 @@ URLs to `find-crate`.
 
 ```sh
 nix build                       # build
-nix flake check                 # build + both ERT suites
+nix flake check                 # build + ERT suites + lint
 nix build .#screenshot          # regenerate README screenshot
 nix build .#gitrepo             # bare .git dir holding the screenshot
-emacs --batch -L . -l crate-tests.el -f ert-run-tests-batch-and-exit
-emacs --batch -L . -l evil-crate-tests.el -f ert-run-tests-batch-and-exit
+emacs --batch -L . -L test -l test/crate-test.el -f ert-run-tests-batch-and-exit
+emacs --batch -L . -L test -l test/evil-crate-test.el -f ert-run-tests-batch-and-exit
 ```
 
 Dev shell tools: Emacs, Nix, sqlite, and evil on `EMACSLOADPATH`, so
 the evil suite runs in a plain shell.
+
+Test layout: `test/` holds one suite per source file, named
+`<unit>-test.el`, plus `test/crate-test-helper.el` for the shared
+fixtures.  The helper name never matches `*-test.el`, because the
+`checkPhase` loads the suites through a `test/*-test.el` glob.  A new
+suite therefore needs no Nix edit, and a suite pulls the fixtures in
+with `(require 'crate-test-helper)`.
 
 Flake outputs: `packages.crate` (= `default`) is `nix/default.nix`
 (`melpaBuild`); its `checkPhase` runs both ERT suites against
@@ -29,14 +36,21 @@ directory of `emacsPackages.evil` on `EMACSLOADPATH`, because
 declares no dependency on evil.  `packages.screenshot` and
 `packages.gitrepo` come from `nix/emacs-screenshot.nix`, which uses
 `mkGitRepository` imported from the `nur-packages` flake input (not
-vendored).
+vendored).  `checks.lint` comes from `nix/lint.nix`: checkdoc plus
+package-lint over `*.el` and `test/*.el`.
+
+The version follows the house scheme for an unreleased package:
+`0.1.0-unstable-<commit date>`.  The flake derives the date from
+`self.sourceInfo.lastModifiedDate` and passes it to the package
+expression; `postPatch` writes the same string into the `;; Version:`
+header of `crate.el`, so the header and the package directory agree.
 
 Byte-compile with warnings as errors (wired into the Nix
 build's checkPhase for all elisp files — crate.el, ol-crate.el,
-crate-tests.el, evil-crate.el, evil-crate-tests.el):
+evil-crate.el and every file under `test/`):
 
 ```sh
-emacs --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+emacs --batch -L . -L test --eval '(setq byte-compile-error-on-warn t)' \
   -f batch-byte-compile crate.el
 ```
 
@@ -48,8 +62,10 @@ Files:
 - `ol-crate.el` — Org link support
 - `evil-crate.el` — optional evil layer (soft dependency)
 - `nix/crate-doc.nix` — Nix expression for rustdoc JSON builds
-- `crate-tests.el` — ERT test suite
-- `evil-crate-tests.el` — ERT suite of the evil layer
+- `nix/lint.nix` — checkdoc plus package-lint gate (`checks.lint`)
+- `test/crate-test.el` — ERT suite of the main package
+- `test/crate-test-helper.el` — shared fixtures and stubs
+- `test/evil-crate-test.el` — ERT suite of the evil layer
 - `nix/default.nix` — package expression (`melpaBuild`)
 - `nix/test-crates-db.nix` — fixture SQLite database for tests/screenshots
 - `nix/emacs-screenshot.nix` — Nix expression for screenshot generation
@@ -677,6 +693,21 @@ against it in the `when-let*` binding, not in the body:
 
 ### Test conventions
 
+Test files live in `test/`, one suite per source file, named
+`<unit>-test.el`.  Shared fixtures live in
+`test/crate-test-helper.el`, which each suite requires by name.  The
+checkPhase loads the suites through a `test/*-test.el` glob, so a new
+suite needs no Nix edit, and the helper name stays clear of that glob.
+Every `ert-deftest` name carries the package prefix; a test of
+`find-crate` therefore starts with `crate-find-crate-`.  `find-crate`
+itself joins the checked prefixes through `package-lint--sane-prefixes`
+in `nix/lint.nix`, because the public entry point has no `crate-`
+prefix.
+
+The `checkPhase` writes the fixture database path over the
+`@testCratesDb@` placeholder in `test/crate-test.el`, so the end-to-end
+tests skip in a plain shell and run inside the Nix build.
+
 - `crate-test--data-hash` builds a mock `crate-data` hash table from
   keyword-value pairs (inner record, not keyed by crate name).
 - `crate-test--crate-table` builds a mock top-level table keyed by
@@ -709,13 +740,13 @@ against it in the `when-let*` binding, not in the body:
   `add-hook` their lambda, then assert on `(buffer-name)`, `crate-name`,
   and `crate-data` inside the hook — verifying it fires once per
   `find-crate` call, in the crate buffer, after locals are set.
-- Evil tests live in `evil-crate-tests.el` and need evil on the load
+- Evil tests live in `test/evil-crate-test.el` and need evil on the load
   path.  The file requires evil before crate, so the auto setup runs at
   load and `crate-evil-mode` starts on: a test that expects it off
   disables it first.  A key test uses `evil-local-mode` plus
   `evil-normal-state` (or `evil-visual-line`) in the mode buffer, then
   `key-binding` on the key.
-- Evil is not a package dependency, so `crate-tests.el` must not
+- Evil is not a package dependency, so `test/crate-test.el` must not
   require it.  A test that needs no evil keeps passing in a build
   without it.
 

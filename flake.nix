@@ -16,10 +16,20 @@
 
   outputs =
     inputs@{
+      self,
       flake-parts,
       nur-packages,
       ...
     }:
+    # Date of the last commit as YYYY-MM-DD, folded into the version
+    # string below.  Flake source info gives it as e.g. "20260922133522",
+    # so slice out the year, month and day and glue them with hyphens.
+    let
+      lastModifiedDate = self.sourceInfo.lastModifiedDate;
+      commitDate = "${builtins.substring 0 4 lastModifiedDate}-${
+        builtins.substring 4 2 lastModifiedDate
+      }-${builtins.substring 6 2 lastModifiedDate}";
+    in
     flake-parts.lib.mkFlake { inherit inputs; } {
       # Elisp is architecture-independent and every dependency
       # (Emacs, sqlite, image tooling) is available on both Linux
@@ -41,8 +51,17 @@
 
           # The package expression lives in nix/ to keep this file lean.
           # testCratesDb is passed explicitly because it is not an
-          # argument callPackage could discover on its own.
-          crateEl = pkgs.callPackage ./nix/default.nix { inherit testCratesDb; };
+          # argument callPackage could discover on its own.  The version
+          # follows the house scheme for an unreleased package:
+          # `<upstream-version>-unstable-<commit date>'.
+          crateEl = pkgs.callPackage ./nix/default.nix {
+            inherit testCratesDb;
+            version = "0.1.0-unstable-${commitDate}";
+          };
+
+          # checkdoc plus package-lint over the package and test sources.
+          # It reads the same `src' the package builds from.
+          lint = pkgs.callPackage ./nix/lint.nix { inherit (crateEl) src; };
 
           # Screenshot.  Kept out of `checks' because it boots Emacs
           # under Xvfb; the ERT suite already covers the rendering code.
@@ -70,7 +89,7 @@
             # `crate` also runs the ERT suite in its checkPhase, so it
             # is the check.
             default = crateEl;
-            inherit crateEl;
+            inherit crateEl lint;
           };
 
           # Dev shell: Emacs plus the tools the on-demand rustdoc path

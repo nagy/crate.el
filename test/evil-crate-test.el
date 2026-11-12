@@ -1,4 +1,4 @@
-;;; evil-crate-tests.el --- Tests of the optional evil layer -*- lexical-binding: t -*-
+;;; evil-crate-test.el --- Tests of the optional evil layer -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025-2026  Daniel Nagy
 
@@ -20,6 +20,10 @@
 
 ;; Tests of evil-crate.el.  Evil is a build-time test dependency, not
 ;; a package dependency.
+;;
+;; Load the file in a batch Emacs, then run the tests with
+;; `ert-run-tests-batch-and-exit'.  The Nix checkPhase loads every
+;; `test/*-test.el' file through a glob, so no file lists it by name.
 
 ;;; Code:
 
@@ -29,7 +33,7 @@
 (require 'evil-crate)
 
 (defun crate-evil-test--binding (mode key &optional visual)
-  "Return the command that KEY runs in a buffer with MODE and evil.
+  "In a buffer in MODE under evil, return the command bound to KEY.
 VISUAL selects a visual line state instead of the normal state."
   (with-temp-buffer
     (funcall mode)
@@ -224,6 +228,6 @@ VISUAL selects a visual line state instead of the normal state."
             (should-not crate-evil-detail-mode)))
       (kill-buffer buffer))))
 
-(provide 'evil-crate-tests)
+(provide 'evil-crate-test)
 
-;;; evil-crate-tests.el ends here
+;;; evil-crate-test.el ends here
