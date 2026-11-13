@@ -245,7 +245,7 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
           (crate-mode)
           (crate--render)
           (let ((content (buffer-string)))
-            (should (string-match-p "Dependents:" content))
+            (should (string-match-p "Dependents" content))
             (should (string-match-p "tokio" content))
             (should (string-match-p "axum" content))))))))
 
@@ -517,18 +517,24 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
   (should (listp crate-font-lock-keywords))
   ;; Field labels, crate name, URLs, date, id.
   (should (>= (length crate-font-lock-keywords) 5))
-  ;; Each entry references a crate-* face symbol.
+  ;; Each entry references a quoted face symbol: a crate face, or the
+  ;; `magit-section-heading', `magit-section-child-count' or `default'
+  ;; face that the renderer leans on.
   (dolist (entry crate-font-lock-keywords)
     (let* ((highlight (cadr entry))
-           (face-form (cadr highlight)))
+           (face-form (cadr highlight))
+           (face (cadr face-form)))
       (should (eq (car-safe face-form) 'quote))
-      (should (string-prefix-p "crate-" (symbol-name (cadr face-form)))))))
+      (should (or (memq face '(magit-section-heading
+                               magit-section-child-count
+                               default))
+                  (string-prefix-p "crate-" (symbol-name face)))))))
 
 (ert-deftest crate-face-definitions ()
   "All custom faces are defined and inherit from known faces."
-  (dolist (face '(crate-name-face crate-field-label crate-url crate-date
+  (dolist (face '(crate-name-face crate-url crate-date
                                   crate-id crate-version crate-license
-                                  crate-description))
+                                  crate-description crate-field-label))
     (should (facep face))
     (should (face-attribute face :inherit))))
 
@@ -1422,8 +1428,11 @@ Substituted at build time by default.nix.")
                    (buffer-substring-no-properties
                     (line-beginning-position) (line-end-position)))))))))
 
-(ert-deftest crate-mode-render-keeps-point-on-dependency ()
-  "A render keeps point on a dependency whose line moved down."
+(ert-deftest crate-mode-render-keeps-the-line-inside-a-section ()
+  "A render keeps the line of point inside its section.
+A dependency row is a line of the Dependencies section and not a
+section of its own, so a render keeps the offset of point from the
+heading, and a row that a new row pushes down moves point with it."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (deps '(("aaa" "^1" "normal" 0)
                 ("serde" "^1" "normal" 0))))
@@ -1443,8 +1452,11 @@ Substituted at build time by default.nix.")
                        ("serde" "^1" "normal" 0)))
           (crate--render)
           (should (= (current-column) column))
+          (should (eq (oref (magit-current-section) type) 'crate-dependencies))
+          ;; The line keeps its place, so the row that now sits there
+          ;; answers, and not the row that used to.
           (should (equal (thing-at-point 'url t)
-                         (concat crate--crates-io-url "serde"))))))))
+                         (concat crate--crates-io-url "bbb"))))))))
 
 (ert-deftest crate-mode-render-keeps-point-on-module-item ()
   "A render keeps point on the same item of the module tree."
@@ -1467,8 +1479,7 @@ Substituted at build time by default.nix.")
         (search-forward "zed")
         (goto-char (match-beginning 0))
         (crate--render)
-        (should (equal (get-text-property (point) 'crate-module)
-                       "root/zed"))
+        (should (equal (oref (magit-current-section) value) "root/zed"))
         (should (looking-at-p "zed"))))))
 
 (ert-deftest crate-mode-render-keeps-another-window-point ()
@@ -1530,10 +1541,13 @@ Substituted at build time by default.nix.")
           (goto-char (point-min))
           (search-forward "serde")
           (goto-char (match-beginning 0))
-          (crate-open-at-point)
+          (push-button)
           (should (equal seen '("serde")))
+          ;; Plain text carries no button, and `push-button' does
+          ;; nothing there.
           (goto-char (point-min))
-          (should-error (crate-open-at-point) :type 'user-error))))))
+          (should-not (push-button))
+          (should (equal seen '("serde"))))))))
 
 (ert-deftest crate-mode-open-url-link ()
   "RET on a URL of a detail buffer opens a browser."
@@ -1556,18 +1570,31 @@ Substituted at build time by default.nix.")
           (goto-char (point-min))
           (search-forward "https://example.com/")
           (goto-char (match-beginning 0))
-          (crate-open-at-point)
+          (call-interactively (key-binding (kbd "RET")))
           (should (equal opened "https://example.com/")))))))
 
-(ert-deftest crate-mode-binds-open-at-point ()
-  "RET follows a link in a detail buffer."
+(ert-deftest crate-mode-binds-ret-to-push-button ()
+  "RET follows a link, and the button map answers it on a link."
   (should (eq (lookup-key crate-mode-map (kbd "RET"))
-              #'crate-open-at-point)))
+              #'push-button)))
 
-(ert-deftest crate-mode-render-tags-sections ()
-  "Every section of a detail buffer carries its heading name.
-The Name line heads the field block, and the dependency, dependent
-and module lists head themselves."
+;;;###autoload
+(defun crate-test--section (type &optional value)
+  "Return the section of TYPE with VALUE, or nil.
+TYPE is the symbol in the `type' slot, VALUE the value of the
+section.  A nil VALUE matches any value."
+  (let (found)
+    (magit-map-sections
+     (lambda (section)
+       (when (and (eq (oref section type) type)
+                  (or (null value) (equal (oref section value) value)))
+         (setq found section))))
+    found))
+
+(ert-deftest crate-mode-render-nests-sections ()
+  "A detail buffer nests its sections under one root section.
+The nine fields come first in `crate-detail-fields' order, then the
+three group sections of `crate-detail-sections-hook'."
   (let ((crate--data-cache (make-hash-table :test 'equal)))
     (cl-letf (((symbol-function 'crate--deps)
                (lambda (_name) '(("serde" "^1" "normal" 0))))
@@ -1582,37 +1609,29 @@ and module lists head themselves."
         (with-temp-buffer
           (crate-mode)
           (crate--render)
-          (should (equal (mapcar (lambda (position)
-                                   (get-text-property position 'crate-section))
-                                 (crate--section-headings))
-                         '(fields dependencies dependents modules))))))))
+          (let* ((root magit-root-section)
+                 (children (oref root children)))
+            (should (eq (oref root type) 'crate-detail))
+            (should (equal (mapcar (lambda (section) (oref section value))
+                                   (seq-take children 9))
+                           '(name description homepage repository
+                             documentation latest_version license downloads
+                             updated_at)))
+            (should (equal (mapcar (lambda (section) (oref section type))
+                                   (seq-drop children 9))
+                           '(crate-dependencies crate-dependents
+                             crate-modules)))
+            (let* ((modules (crate-test--section 'crate-modules))
+                   (root-module (car (oref modules children)))
+                   (item (car (oref root-module children))))
+              (should (equal (oref root-module value) "root"))
+              (should (eq (oref item type) 'crate-module))
+              (should (equal (oref item value) "root/zed")))))))))
 
-(ert-deftest crate-toggle-section-folds-the-section-of-point ()
-  "TAB folds the section around point from a line of its body."
-  (let ((crate--data-cache (make-hash-table :test 'equal))
-        (crate-doc-enable nil))
-    (cl-letf (((symbol-function 'crate--deps) #'ignore)
-              ((symbol-function 'crate--dependents) #'ignore))
-      (crate-test--with-crate "test-crate"
-                              (crate-test--data-hash :name "test-crate"
-                                                     :license "MIT")
-        (with-temp-buffer
-          (crate-mode)
-          (crate--render)
-          (goto-char (point-min))
-          (search-forward "MIT")
-          (beginning-of-line)
-          (let ((line (point)))
-            (crate-toggle-section)
-            (should (equal (crate--collapsed-sections) '(fields)))
-            (should (outline-invisible-p line))
-            (should (looking-at-p "Name:"))
-            (crate-toggle-section)
-            (should-not (crate--collapsed-sections))
-            (should-not (outline-invisible-p line))))))))
-
-(ert-deftest crate-mode-render-restores-folds ()
-  "A render keeps the folded sections of a reader."
+(ert-deftest crate-mode-field-labels-carry-no-heading-face ()
+  "A field label keeps its colon and wears `crate-field-label'.
+A reader tells a field from a foldable section at a glance, so the
+label takes no section heading face."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-doc-enable nil))
     (cl-letf (((symbol-function 'crate--deps) #'ignore)
@@ -1622,15 +1641,119 @@ and module lists head themselves."
         (with-temp-buffer
           (crate-mode)
           (crate--render)
-          (crate-toggle-section)
-          (should (equal (crate--collapsed-sections) '(fields)))
+          (goto-char (point-min))
+          (should (search-forward "Name:" nil t))
+          (goto-char (match-beginning 0))
+          (should (eq (get-text-property (point) 'face)
+                      'crate-field-label)))))))
+
+(ert-deftest crate-mode-section-heading-carries-no-colon ()
+  "A group heading ends without a colon and wears the heading face.
+A colon would make `magit-insert-child-count' rewrite the heading
+after its children recorded their positions."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
           (crate--render)
-          (should (equal (crate--collapsed-sections) '(fields))))))))
+          (goto-char (point-min))
+          (should (search-forward "Dependencies" nil t))
+          (should-not (eq (char-after) ?:))
+          (goto-char (match-beginning 0))
+          (should (eq (get-text-property (point) 'face)
+                      'magit-section-heading)))))))
+
+(ert-deftest crate-mode-section-heading-shows-child-count ()
+  "A group heading carries its count when the reader asks for it.
+The label keeps the heading face and the number takes the child
+count face, the way a Magit heading splits the two."
+  (dolist (show '(t nil))
+    (let ((crate--data-cache (make-hash-table :test 'equal))
+          (crate-doc-enable nil)
+          (magit-section-show-child-count show))
+      (cl-letf (((symbol-function 'crate--deps)
+                 (lambda (_name) '(("serde" "^1" "normal" 0)
+                                   ("tokio" "^1" "normal" 0))))
+                ((symbol-function 'crate--dependents) #'ignore))
+        (crate-test--with-crate "test-crate"
+                                (crate-test--data-hash :name "test-crate")
+          (with-temp-buffer
+            (crate-mode)
+            (crate--render)
+            (goto-char (point-min))
+            (if show
+                (progn
+                  (should (search-forward "Dependencies (2)" nil t))
+                  (let ((space-start (- (point) 4)))
+                    (should (eq (get-text-property space-start 'face)
+                                'magit-section-child-count))
+                    (should (eq (get-text-property (1- space-start) 'face)
+                                'magit-section-heading))))
+              (should (search-forward "Dependencies" nil t))
+              (should (looking-at-p "\n")))))))))
+
+(ert-deftest crate-mode-toggle-section-folds-the-section-of-point ()
+  "A fold at a line of a section body hides that body."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0)
+                                 ("tokio" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "serde")
+          (goto-char (match-beginning 0))
+          (let ((section (magit-current-section)))
+            (should (eq (oref section type) 'crate-dependencies))
+            (let ((row (1- (oref section end))))
+              (should-not (invisible-p row))
+              (magit-section-toggle section)
+              (should (oref section hidden))
+              (should (invisible-p row))
+              (magit-section-toggle section)
+              (should-not (oref section hidden))
+              (should-not (invisible-p row)))))))))
+
+(ert-deftest crate-mode-render-restores-folds ()
+  "A render keeps the folds of a reader."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
+              ((symbol-function 'crate--dependents) #'ignore))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash :name "test-crate")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "serde")
+          (goto-char (match-beginning 0))
+          (magit-section-toggle (magit-current-section))
+          (crate--render)
+          ;; The heading stays visible, so a search finds the section
+          ;; again, and the body of the section stays hidden.
+          (goto-char (point-min))
+          (search-forward "Dependencies")
+          (let ((section (magit-current-section)))
+            (should (eq (oref section type) 'crate-dependencies))
+            (should (oref section hidden))
+            (should (invisible-p (oref section content)))))))))
 
 (ert-deftest crate-mode-binds-toggle-section ()
   "TAB folds the section of point, over a link as well as over text."
   (should (eq (lookup-key crate-mode-map (kbd "TAB"))
-              #'crate-toggle-section))
+              #'magit-section-toggle))
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-doc-enable nil))
     (cl-letf (((symbol-function 'crate--deps)
@@ -1645,7 +1768,7 @@ and module lists head themselves."
           (search-forward "serde")
           (goto-char (match-beginning 0))
           ;; The button keymap of the link keeps RET, and TAB folds.
-          (should (eq (key-binding (kbd "TAB")) #'crate-toggle-section))
+          (should (eq (key-binding (kbd "TAB")) #'magit-section-toggle))
           (should (eq (key-binding (kbd "RET")) #'push-button)))))))
 
 (ert-deftest crate-mode-links-are-one-button-type ()
@@ -1680,7 +1803,7 @@ dependency name and the docs.rs fallback alike."
           (crate-mode)
           (crate--render)
           (let ((content (buffer-string)))
-            (should (string-match-p "Dependencies:" content))
+            (should (string-match-p "Dependencies" content))
             (should (string-match-p "serde" content))
             (should (string-match-p "\\^1\\.0" content))
             (should (string-match-p "dev" content))

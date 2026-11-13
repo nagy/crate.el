@@ -76,9 +76,9 @@ VISUAL selects a visual line state instead of the normal state."
 (ert-deftest crate-evil-detail-keys-remap ()
   "The detail bindings reach the crate commands through a remap."
   (should (eq (crate-evil-test--binding #'crate-mode "RET")
-              #'crate-open-at-point))
+              #'push-button))
   (should (eq (crate-evil-test--binding #'crate-mode "TAB")
-              #'crate-toggle-section))
+              #'magit-section-toggle))
   (should (eq (crate-evil-test--binding #'crate-mode "q")
               #'quit-window))
   (should (eq (crate-evil-test--binding #'crate-mode "gr")
@@ -142,7 +142,8 @@ VISUAL selects a visual line state instead of the normal state."
   "The evil fold commands close and open a crate section."
   (let ((crate--data-cache (make-hash-table :test 'equal))
         (crate-doc-enable nil))
-    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+    (cl-letf (((symbol-function 'crate--deps)
+               (lambda (_name) '(("serde" "^1" "normal" 0))))
               ((symbol-function 'crate--dependents) #'ignore))
       (with-temp-buffer
         (crate-mode)
@@ -157,10 +158,14 @@ VISUAL selects a visual line state instead of the normal state."
                       table))
         (crate--render)
         (goto-char (point-min))
-        (evil-close-fold)
-        (should (equal (crate--collapsed-sections) '(fields)))
-        (evil-open-fold)
-        (should-not (crate--collapsed-sections))))))
+        (search-forward "serde")
+        (goto-char (match-beginning 0))
+        (let ((section (magit-current-section)))
+          (should (eq (oref section type) 'crate-dependencies))
+          (evil-close-fold)
+          (should (oref section hidden))
+          (evil-open-fold)
+          (should-not (oref section hidden)))))))
 
 (ert-deftest crate-evil-open-web ()
   "The c command opens the crates.io page of the crate."

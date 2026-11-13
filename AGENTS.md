@@ -18,8 +18,9 @@ emacs --batch -L . -L test -l test/crate-test.el -f ert-run-tests-batch-and-exit
 emacs --batch -L . -L test -l test/evil-crate-test.el -f ert-run-tests-batch-and-exit
 ```
 
-Dev shell tools: Emacs, Nix, sqlite, and evil on `EMACSLOADPATH`, so
-the evil suite runs in a plain shell.
+Dev shell tools: an Emacs wrapper that carries `magit-section` and
+`evil` on its load path, plus Nix and sqlite, so both suites and the
+byte-compile command below run in a plain shell.
 
 Test layout: `test/` holds one suite per source file, named
 `<unit>-test.el`, plus `test/crate-test-helper.el` for the shared
@@ -30,10 +31,12 @@ with `(require 'crate-test-helper)`.
 
 Flake outputs: `packages.crate` (= `default`) is `nix/default.nix`
 (`melpaBuild`); its `checkPhase` runs both ERT suites against
-`nix/test-crates-db.nix`.  The `preBuild` phase puts the elpa
-directory of `emacsPackages.evil` on `EMACSLOADPATH`, because
-`evil-crate.el` needs evil to compile and to test.  The package still
-declares no dependency on evil.  `packages.screenshot` and
+`nix/test-crates-db.nix`.  `melpaBuild` propagates `packageRequires`
+but does not put it on the load path of the build, so `preBuild`
+prepends an `emacsWithPackages` wrapper that carries `magit-section`
+and `evil` to `PATH`; the wrapper sets `EMACSLOADPATH` itself.  The
+package declares `magit-section` and declares no dependency on evil,
+which only `evil-crate.el` needs.  `packages.screenshot` and
 `packages.gitrepo` come from `nix/emacs-screenshot.nix`, which uses
 `mkGitRepository` imported from the `nur-packages` flake input (not
 vendored).  `checks.lint` comes from `nix/lint.nix`: checkdoc plus
@@ -101,12 +104,13 @@ Files:
 4. **`crate-doc--module-tree`** — pure function, parses JSON into nested
    `(NAME KIND (CHILDREN...) DOC)` tuples. `KIND` is a symbol (struct,
    trait, function, module, macro, enum, etc.).
-5. **`insert-doc-tree`** — `cl-labels` helper in `crate--render`.
-   Renders the tree with indentation, each item prefixed with its KIND
-   as a bracketed tag (`- [struct] name`, fontified via
-   `crate-font-lock-keywords`); shows doc summaries after leaf items,
-   skips `:null`-named items (use imports), and tags a name with
-   `crate-module` and its full path, so a render keeps point on it.
+5. **`crate-insert-module-items`** — recursive inserter inside the
+   Modules section.  Writes the tree with two spaces of indentation
+   per level and a bracketed KIND tag (`  - [struct] name`, fontified
+   through `crate-font-lock-keywords`), shows a doc summary after a
+   leaf item, skips `:null`-named items (use imports), and opens one
+   `crate-module` section per item whose value is the full path, so a
+   fold and the line of point survive a render.
 
 ### Tree tuple shape
 
@@ -137,45 +141,47 @@ is nil. Callers must use `(cadddr item)` to get docs:
 5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
    `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Text Buttons, Sections and Point Keeping (`crate-link` button
-   type, the `crate-section` headings and `crate-toggle-section`,
-   `crate--line-identity` and the restore helpers, which keep point
+7. Text Buttons and Point Keeping (`crate-link` button type,
+   `crate--line-record` and the restore helpers, which keep point
    across the erase of a render)
-8. Major Mode (`crate-mode`, derived from `special-mode` for
-   read-only + `q`/`g` conventions, thin: only `setq-local` for
-   font-lock defaults, `goto-address-mode`, the outline heading
-   search and `outline-level`, the bookmark record function, and
-   `revert-buffer-function`; `crate-open-at-point` follows a link at
-   point and `crate-toggle-section` folds a section; content is
-   inserted by `crate--render`, which uses the `crate-name` /
-   `crate-data` buffer-locals)
-9. Completion (`crate--match-names`, `crate--annotate`,
+8. Sections (`crate-detail-sections-hook`, `crate-detail-fields`, and
+   the inserters `crate-insert-fields`, `crate-insert-field`,
+   `crate-insert-dependencies`, `crate-insert-dependents`,
+   `crate-insert-modules`, `crate-insert-module-items`)
+9. Major Mode (`crate-mode`, derived from `magit-section-mode` for
+   the section tree, the folds and the keymap, plus `special-mode`
+   read-only + `q`/`g` conventions; thin: only `setq-local` for
+   font-lock defaults, the two section options, `goto-address-mode`,
+   the bookmark record function and `revert-buffer-function`; `RET`
+   is `push-button`; content is inserted by `crate--render`, which
+   uses the `crate-name` / `crate-data` buffer-locals)
+10. Completion (`crate--match-names`, `crate--annotate`,
    `crate--collection`, `crate-refresh-cache`)
-10. Marginalia (`crate--marginalia-annotator`, registered for
+11. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
-11. Interactive Commands (`find-crate`, `crate-browse-url`,
+12. Interactive Commands (`find-crate`, `crate-browse-url`,
     `crate-install-browse-url-handler`; `find-crate` is the single
     funnel for all entry points — interactive, URL handler, browse
     visit, bookmarks, dependency buttons — and runs
     `crate-visit-hook` at the end, after `crate-name` and
     `crate-data` are set and the buffer rendered; the window comes
     from `crate-display-buffer-action`)
-12. Bookmarks (`crate--bookmark-make-record-function`,
+13. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
-13. Org Integration (deferred load of `ol-crate`)
-14. Evil Integration (deferred load of `evil-crate` when evil loads,
+14. Org Integration (deferred load of `ol-crate`)
+15. Evil Integration (deferred load of `evil-crate` when evil loads,
     and the `crate-evil-auto-setup` call)
-15. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+16. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
-16. Dependency Copy (`crate-copy-dependency`, bound to `w` in
+17. Dependency Copy (`crate-copy-dependency`, bound to `w` in
     `crate-mode-map`, `crate-browse-mode-map`, and
     `crate-embark-map`; copies `NAME = "VERSION"` for
     `Cargo.toml`)
-17. Cargo.toml Integration (`crate-cargo-completion-at-point`,
+18. Cargo.toml Integration (`crate-cargo-completion-at-point`,
     `crate-install-cargo-toml-capf`, `crate-cargo-toml-modes` —
     crate-name completion in `[dependencies]` family sections,
     soft TOML-mode dep via the modes list)
-18. Embark (action keymap `crate-embark-map`, export function,
+19. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions
@@ -190,16 +196,24 @@ use `declare-function`.  Required deps get `(require 'package)`.
 
 ### `cl-labels` for mode-local helpers
 
-Helper functions that are only called from within a major mode
-body should be defined as `cl-labels` closures scoped to the
-mode, not as top-level `defun`s.  This keeps them private and
-makes the mode self-contained.
+Helper functions that only a major mode body calls belong in a
+`cl-labels` closure, not in a top-level `defun`.  The closure keeps
+them private and makes the mode self-contained.
+
+**A section inserter is the exception.**  It carries a `crate-`
+prefix, takes no arguments and lives at top level, because a user
+reorders it in `crate-detail-sections-hook` and calls it by name.
+`crate-insert-field` and `crate-insert-module-items` follow that
+rule.
 
 ```elisp
-(cl-labels ((field (label key)
-              (insert (propertize label 'crate-field key))
-              ...))
-  (field "Homepage: " "homepage")
+;; Top-level, because the hook names it:
+(defun crate-insert-dependents ()
+  "Insert the Dependents section of the current crate."
+  ...)
+
+;; Mode-local, because nothing outside the body calls it:
+(cl-labels ((field-key (line) ...))
   ...)
 ```
 
@@ -389,22 +403,29 @@ only.
 
 ### Faces, display faces, and font-lock keywords
 
-Nine custom faces (`crate-name-face`, `crate-field-label`,
-`crate-url`, `crate-date`, `crate-id`, `crate-version`,
-`crate-license`, `crate-description`) inherit from `package.el`
-or standard faces when available, with built-in fallbacks.  No
-`(require 'package)` needed — the `:inherit` list resolves
-left-to-right, skipping undefined faces.
+Eight custom faces (`crate-name-face`, `crate-url`, `crate-date`,
+`crate-id`, `crate-version`, `crate-license`, `crate-description`,
+`crate-field-label`) inherit from `package.el` or standard faces when
+available, with built-in fallbacks.  No `(require 'package)` needed —
+the `:inherit` list resolves left-to-right, skipping undefined faces.
 
-**Value faces must be declared as `crate-font-lock-keywords` rules,
-not set via `propertize`.  `crate-mode` calls `font-lock-ensure`
-after rendering, so a `face` text property on text that no keyword
-matches is wiped by re-fontification (a plain `propertize` face on
-the version value becomes nil).  This is why the version/date/id/
-description/URL value faces all live in `crate-font-lock-keywords`
-as `(1 'face)` group 1 rules on `^Label:[[:space:]]+` patterns.
-Where a text property is genuinely needed, use non-`face`
-properties.
+A field label and a section heading read unlike each other on purpose.
+A field label keeps its trailing colon and takes `crate-field-label`.
+A section heading carries no colon and takes `magit-section-heading`,
+the face of every Magit heading, so the sections of a crate buffer
+read like a Magit buffer.  A module name is the content of the section
+above it, so it takes the `default` face.
+
+**Every face must be declared as a `crate-font-lock-keywords` rule,
+never set via `propertize`.  `crate-mode` calls `font-lock-ensure`
+after rendering, and that call unfontifies the buffer first, which
+removes a `face` property *and* a `font-lock-face` property from text
+that no keyword matches.**  So a plain `propertize` face on a module
+name or a doc summary does not survive, and neither does the
+`font-lock-face` that `magit-insert-heading` paints.  Hence the label,
+group heading, kind tag, module name and doc summary rules all live
+in `crate-font-lock-keywords`, and a rule needs an anchor in the text:
+the `- ` bullet of a module line is that anchor for the module tree.
 
 ### Links in a detail buffer
 
@@ -418,66 +439,111 @@ an evaporating overlay that carries the mouse face, the `RET` and
 and a text property that hints at a link without an action only
 misleads.
 
-`crate-open-at-point` follows the button at point, which is a crate
-link or a `goto-address` URL overlay, and `RET` in `crate-mode-map`
-runs it.  The `keymap` text property of a link and the overlay of
-`goto-address` still win over the major mode map at a link, so the
-command mainly gives a plain text line a clear "No link at point"
-error instead of a read-only edit error.
+`RET` in `crate-mode-map` is `push-button`, the built-in command.
+Emacs 31 `push-button` returns nil on text without a button and does
+not signal, so a plain line answers nothing.  The `keymap` text
+property of a `crate-link` button wins over the major mode map at a
+link, and the `goto-address` overlay of a URL keeps its own bindings.
 
 ### Point keeping across a render
 
 `crate--render` erases the buffer, so it records the line of point
 before the render and restores it after the render
-(`crate--point-record`, `crate--restore-point`).  The record names
-the line and not a buffer position: `crate-field` (a field key),
-`crate-section` (the name of a section), `crate-module` (the path of
-an item in the module tree), `crate-url` (the URL of a crate link) or,
-for a line without such an identity,
-the text of the line and its ordinal among the equal lines above it
-(`crate--line-occurrence`).  A blank line leans on the nearest line
-above that has an identity, and the column travels with the line, so
-a refresh keeps the reader on the same value when the lines above
-changed length.  `crate--window-records` keeps the line of every
-other window that shows the buffer, because the erase removes the
-text that its window point markers point into.  A buffer with no
-identity holds no place to keep, so the first render still lands at
-`point-min`.  `crate--render` owns the position: no renderer or
-caller ends with `(goto-char (point-min))`.
+(`crate--window-records`, `crate--restore-window-records`).  The record
+names a **section** and not a buffer position: the section object at
+point, the distance in lines from the start of that section and the
+column (`crate--line-record`).  `magit-section-goto-successor` finds
+the section again through `magit-section-ident`, which walks the type
+and value of the section and its parents, so a re-render that makes
+new objects still finds the same place.  A line without a section
+holds no record, and a section that the render dropped leaves point at
+`point-min`.
 
-A new line identity needs three things: the text property in the
-renderer, a branch in `crate--line-identity` and a branch in
-`crate--goto-identity`.  `crate--goto-property` compares the value
-with `equal` and not with `eq`, because a re-render makes a new
-string object for a property that spells the same text.
+The record covers the buffer point and the point of every window that
+shows the buffer.  The buffer record is a cons with nil in place of a
+window, because a buffer can show in no window.  The restore for a
+window runs inside `save-excursion`: a window keeps the point of the
+buffer point, so a restore must not move the buffer point while it
+serves another window.
+
+A section value that a render keeps must stay stable across renders.
+A field carries its key, a module carries its full path, and a group
+carries nil.  A module path and not a bare name, because two modules
+of different parents can share a name.
+
+A line inside a section body keeps its line offset and not its text.
+A dependency row is a line of the Dependencies section and not a
+section of its own, so a new row above point moves point to the row
+that now sits on its line
+(`crate-mode-render-keeps-the-line-inside-a-section` covers that).
+Give a row its own section only if it needs its own identity.
 
 ### Sections and folds
 
-`crate--render` tags each heading line with `crate-section`: the Name
-line heads the field block, and the Dependencies, Dependents and
-Modules lines head themselves.  `crate-mode` enables
-`outline-minor-mode` and sets `outline-search-function` to
-`crate--outline-search`, which searches for the text property, so no
-heading needs a marker character in the text.  `outline-level`
-answers one for every section, because every section is a top level
-section, and `outline-minor-mode-highlight` stays nil, so the face of
-the renderer survives.  `outline-minor-mode-cycle` and
-`outline-minor-mode-use-buttons` are nil buffer-locally, so an Emacs
-version that cycles on TAB or draws an arrow on a heading keeps TAB
-with `crate-toggle-section` and adds no glyph to the text.
+A detail buffer is a tree of `magit-section` sections, and
+`crate-mode` derives from `magit-section-mode`.  `crate--render`
+erases the buffer, opens one `crate-detail` root section, and runs
+`crate-detail-sections-hook` through `magit-run-section-hook`.  Every
+inserter uses `magit-insert-section` and writes its heading through
+`magit-insert-heading`, so a heading line, the `TAB` fold, the section
+motions (`n`, `p`, `^`, `1`-`4`), the current-section highlight and
+the fringe click all come from `magit-section`.
 
-`crate-toggle-section` (`TAB`) folds the section around point from
-any line of the section and leaves point on the heading line.  The
-`crate-link-map` of the `crate-link` button type parents `button-map`
-and rebinds TAB, because a dependency row is both a button and a line
-of the Dependencies section, and the `keymap` text property of a
-button would otherwise win over `crate-mode-map`.
+**`crate-detail-sections-hook` is the one extension point for the
+section list.**  A user reorders or drops a section with `setopt` or
+`add-hook`, and `crate-detail-fields` does the same for the field
+lines.  An inserter takes no arguments and reads the `crate-name` and
+`crate-data` buffer-locals.  Do not add a second `defcustom` that
+lists sections.
 
-`crate--render` reads the folded sections before it erases the buffer
-(`crate--collapsed-sections`) and folds them again after the render
-(`crate--restore-sections`).  The fold restore comes after the point
-restore, because `search-invisible` is nil and a text search cannot
-reach a line inside a folded section.
+**`magit-section-inhibit-markers` stays t.**  A section records the
+start and end of its region, and a marker per end makes a render
+quadratic in the size of the module tree: 4000 nested sections take
+1.4s with markers and 0.06s without, because each insert has to move
+every later marker.  A crate buffer inserts once and then only reads,
+so plain positions serve until the next render rebuilds them.
+
+**`magit-section-show-child-count` stays at its default.**  A reader
+decides whether a heading carries its count, and `crate-mode` never
+binds it.
+
+**A heading carries no colon.**  With markers inhibited the automatic
+child count rewrites the heading of a section that ends in a colon
+*after* the children record their positions, which leaves those
+positions short by the width of the count, and a fold of the Modules
+section would then leave the tail of the heading visible.
+
+**The count goes into the heading string before the body starts.**
+`crate-insert-dependencies`, `crate-insert-dependents` and
+`crate-insert-modules` pass the number through `crate--child-count` to
+`magit-insert-heading`, which writes ` (N)` at once, paints it with
+`magit-section-child-count` and reads
+`magit-section-show-child-count` itself.  So no later insert moves a
+child position.  `crate--child-count` answers nil for a zero count and
+for a reader who turned the option off, so no heading carries a zero.
+`crate--module-count` drops the `:null`-named use imports, which
+insert no section.
+
+**The folds need no code of their own.**  A section keeps its
+visibility by ident in `magit-section-visibility-cache`, so
+`crate--render` only has to end with
+`(magit-section-show magit-root-section)` under
+`(let ((magit-section-cache-visibility nil)) ...)`.  That binding
+keeps the cache small: an entry appears only for a section that a user
+folded or unfolded, and the hook that reads the cache walks only those
+entries.
+
+`crate-link-map` keeps a `TAB` entry, now `magit-section-toggle`: a
+dependency row is both a button and a line of the Dependencies
+section, and the `keymap` text property of a button wins over the
+major mode map.  Without the entry `TAB` on a link would run the
+`button-map` command `forward-button`.
+
+`evil-fold-list` holds no `magit-section-mode` entry, and
+`evil--mode-p` compares the major mode name itself, so a detail buffer
+needs a `crate-mode` entry.  `evil-crate.el` adds one, with lambdas,
+because `magit-section-toggle` and its siblings take the section as an
+argument.
 
 ### `thing-at-point` URL provider for dependency names
 
@@ -667,10 +733,13 @@ such as `gr`, `gc` or `gm`, is a plain key string.  The evil motions
 (`j`, `k`, `gg`, `G`, `C-d`, `C-u`, `/`, `n`, `N`) stay untouched.
 
 The fold commands of evil (`zc`, `zo`, `za`) reach the sections through
-`evil-fold-list` and the `outline-minor-mode` entry, because a detail
-buffer runs that minor mode and its headings carry `crate-section`.
-`crate-toggle-section` and `crate-link-map` keep `TAB` for the fold in
-the normal state.
+`evil-fold-list`.  The list holds an `outline-minor-mode` entry and no
+`magit-section-mode` entry, and `evil--mode-p` compares the major mode
+name itself, so `evil-crate.el` adds a `crate-mode` entry whose actions
+wrap `magit-section-toggle` and its siblings in a lambda: those
+commands take the section as an argument.  `TAB` stays a plain key
+binding to `magit-section-toggle`, for the same reason as in
+`crate-link-map`.
 
 ### Null guard in `when-let*` conditions
 
@@ -749,6 +818,15 @@ tests skip in a plain shell and run inside the Nix build.
 - Evil is not a package dependency, so `test/crate-test.el` must not
   require it.  A test that needs no evil keeps passing in a build
   without it.
+- A section test reads the tree, not the text: `magit-current-section`,
+  `(oref section type)`, `(oref section value)` and
+  `(oref section hidden)`, plus the helper `crate-test--section` for a
+  section by type and value.  A fold moves point out of a hidden body
+  and `search-forward` skips invisible text, so find a section through
+  its visible heading.
+- A fold test asserts visibility with `invisible-p` on a position
+  inside the body, and a fold-survives-a-render test asserts
+  `(oref section hidden)` on the section of the new render.
 
 ## Dependencies
 
@@ -759,11 +837,11 @@ tests skip in a plain shell and run inside the Nix build.
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |
 | goto-addr | yes | built-in, links the URLs of a detail buffer |
-| outline | yes | built-in, folds the sections of a detail buffer |
+| magit-section | yes | folds, highlights and moves between the sections of a detail buffer |
 | evil | soft | optional key layer in `evil-crate.el`; the package never requires it |
 | nix (external) | soft | required only when `crate-doc-enable` is t; runs `nix-build` on `nix/crate-doc.nix` for on-demand rustdoc JSON |
 
 ## TODO
 
 None right now.  The former Cargo.toml completion-at-point TODO
-shipped as section 17.
+shipped as section 18.

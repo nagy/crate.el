@@ -49,9 +49,11 @@
 ;; the window; gr, r and R refresh.  A visual line selection followed
 ;; by y copies the dependency lines of every selected row.
 ;;
-;; The fold commands of evil reach the sections too, because a detail
-;; buffer runs `outline-minor-mode': zc closes, zo opens and za
-;; toggles the section of point.
+;; The fold commands of evil reach the sections too: zc closes, zo
+;; opens and za toggles the section of point.  `evil-fold-list' holds
+;; an entry for `outline-minor-mode' and none for a Magit section
+;; buffer, and `evil--mode-p' compares the major mode itself, so this
+;; file adds a `crate-mode' entry of its own.
 
 ;;; Code:
 
@@ -68,11 +70,9 @@
 (declare-function crate-browse-search-url "crate" ())
 (declare-function crate-browse-visit "crate" ())
 (declare-function crate-copy-dependency "crate" (&optional name))
-(declare-function crate-open-at-point "crate" ())
-(declare-function crate-toggle-section "crate" ())
-
 (defvar crate--crates-io-url)
 (defvar crate-name)
+(defvar magit-root-section)
 
 (defcustom crate-evil-auto-enable t
   "Non-nil if the evil bindings load without an explicit call.
@@ -85,10 +85,10 @@ bindings off until a user calls `crate-evil-mode'."
 ;;; Keys
 
 (defvar crate-evil-detail-keys
-  '(([remap evil-ret] . crate-open-at-point)
+  '(([remap evil-ret] . push-button)
     ;; TAB is C-i, the jump of the evil jump list, in the normal
     ;; state.  A detail buffer folds the section of point instead.
-    ("TAB" . crate-toggle-section)
+    ("TAB" . magit-section-toggle)
     ([remap evil-record-macro] . quit-window)
     ("gr" . revert-buffer)
     ([remap evil-replace] . revert-buffer-quick)
@@ -154,6 +154,26 @@ cell of every row, so the copy follows the current data."
           (kill-new (mapconcat #'identity (nreverse lines) "\n"))
           (message "Copied %d dependency lines" (length lines)))
       (user-error "No rows selected"))))
+
+;;; Folding
+
+;; `magit-section-toggle', `magit-section-show' and `magit-section-hide'
+;; take the section as an argument, so the fold list wraps them in a
+;; command that reads the section of point.
+(add-to-list 'evil-fold-list
+             `((crate-mode)
+               :open-all   (lambda ()
+                             (magit-section-show magit-root-section))
+               :close-all  magit-section-show-level-1-all
+               :toggle     (lambda ()
+                             (magit-section-toggle (magit-current-section)))
+               :open       (lambda ()
+                             (magit-section-show (magit-current-section)))
+               :open-rec   (lambda ()
+                             (magit-section-show-children
+                              (magit-current-section)))
+               :close      (lambda ()
+                             (magit-section-hide (magit-current-section)))))
 
 ;;; Local minor modes
 

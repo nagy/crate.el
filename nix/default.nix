@@ -4,6 +4,9 @@
   emacs ? pkgs.emacs,
   emacsPackages ? emacs.pkgs,
   melpaBuild ? emacsPackages.melpaBuild,
+  # The detail buffer is a tree of `magit-section' sections, so the
+  # package declares it.
+  magitSection ? emacsPackages.magit-section,
   # Optional evil layer.  The package does not depend on evil, but the
   # build compiles evil-crate.el against it and the suite runs with it
   # on the load path.
@@ -18,6 +21,12 @@
   version ? "0.1.0",
 }:
 
+let
+  emacsWithDeps = emacsPackages.emacsWithPackages (_: [
+    magitSection
+    evil
+  ]);
+in
 melpaBuild {
   pname = "crate";
   inherit version;
@@ -25,16 +34,17 @@ melpaBuild {
   # package sources and tests sit one level up.
   src = lib.cleanSource ./..;
 
-  packageRequires = [ ];
+  packageRequires = [ magitSection ];
 
   turnCompilationWarningToError = true;
 
-  # The optional evil layer needs evil to compile, so the load path
-  # holds it for the build and for the check.
+  # `packageRequires' tells the package set what to propagate, but it
+  # does not put anything on the load path of this build, so the build
+  # and the check run through a wrapper Emacs that carries the declared
+  # dependency and the optional evil layer.  The wrapper sets
+  # `EMACSLOADPATH' itself, so it only has to come first on `PATH'.
   preBuild = ''
-    evil_dir=$(find ${evil}/share/emacs/site-lisp/elpa \
-      -mindepth 1 -maxdepth 1 -type d -name 'evil-*' -print -quit)
-    export EMACSLOADPATH="$evil_dir:''${EMACSLOADPATH-}"
+    export PATH="${emacsWithDeps}/bin:$PATH"
   '';
 
   # Two substitutions, both only visible inside the build:

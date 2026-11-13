@@ -13,10 +13,11 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 - =M-x find-crate= with completion, Marginalia annotations, and Embark actions
 - The homepage, repository and documentation URL of a detail buffer are
   clickable links, unless =crate-goto-address= is nil
-- A refresh keeps point on the same field, dependency or module item,
-  and every window that shows the buffer keeps its own line
-- =TAB= folds the field block, the dependency and dependent lists, or
-  the module tree of a detail buffer
+- The detail buffer is a tree of =magit-section= sections, so it folds,
+  highlights and moves like a Magit buffer, and
+  =crate-detail-sections-hook= decides which sections appear
+- A refresh keeps point on the same line, and every window that shows
+  the buffer keeps its own line
 - =M-x crate-browse-crates= tabulated list view with sorting and bookmarks
 - The Version column sorts as semver (=1.9.0= before =1.10.0=, a
   pre-release before its release) and the columns fit the window;
@@ -67,16 +68,32 @@ key.  The evil motions stay untouched.
 - In a detail buffer: =RET= opens the link at point, =TAB= folds the
   section at point, =c= opens crates.io, =y= and =Y= copy a dependency
   line, =q= quits the window, =gr= refreshes.  =zc=, =zo= and =za=
-  fold through =outline-minor-mode=.
+  fold the sections, because the buffer is a =magit-section= tree.
 
 * Crate details
 
-=M-x find-crate= opens the detail buffer.  =TAB= folds or unfolds the
-section around point: the field block, Dependencies, Dependents or
-Modules, and a refresh keeps the folded sections.  A dependency name
-and the URL fields are links, so =RET= on a dependency opens it and
-=RET= on a URL opens the browser.  =w= copies a =Cargo.toml=
-dependency line.
+=M-x find-crate= opens the detail buffer.  The buffer is a tree of
+=magit-section= sections, so it answers like a Magit buffer: =TAB=
+folds or unfolds the section at point, =n= and =p= move between
+sections, =^= goes to the parent section, and =1= to =4= show that many
+levels.  Every module of the module tree is a section of its own.  A
+refresh keeps the folded sections and the line of point.
+
+`crate-detail-sections-hook' lists the functions that insert the
+sections, in display order, and `crate-detail-fields' does the same for
+the field lines.  Drop an entry to drop a section, or reorder the
+entries to reorder them:
+
+#+begin_src elisp
+  (setopt crate-detail-sections-hook
+          '(crate-insert-fields
+            crate-insert-dependents
+            crate-insert-dependencies))
+#+end_src
+
+A dependency name and the URL fields are links, so =RET= on a
+dependency opens it and =RET= on a URL opens the browser.  =w= copies a
+=Cargo.toml= dependency line.
 
 * Browse table
 

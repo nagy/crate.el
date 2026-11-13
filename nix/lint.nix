@@ -14,7 +14,14 @@
 runCommand "crate-lint"
   {
     nativeBuildInputs = [
-      (emacsPackages.emacsWithPackages (p: [ p.package-lint ]))
+      # `magit-section' joins the pack so package-lint can see that the
+      # declared dependency is installable; the lint reads source only.
+      (emacsPackages.emacsWithPackages (
+        p: [
+          p.package-lint
+          p.magit-section
+        ]
+      ))
       # Gives Emacs a writable HOME, so the builder needs no `export
       # HOME=$TMPDIR' line and no two checks share a home directory.
       pkgs.writableTmpDirAsHomeHook
