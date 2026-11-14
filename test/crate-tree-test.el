@@ -167,6 +167,45 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
                     "try_into" "type_id"))
       (should-not (crate-tree-test--item name)))))
 
+(ert-deftest crate-tree-items-drops-derive-generated-methods ()
+  "An impl that a derive macro wrote never reaches the tree.
+Rustdoc tags a derived impl with `automatically_derived', and the
+fixture crate derives nothing, so this document stands in."
+  (let* ((json (json-parse-string
+                (concat
+                 "{\"format_version\":57,\"root\":0,\"index\":{"
+                 "\"0\":{\"id\":0,\"name\":\"dtest\","
+                 "\"visibility\":\"public\","
+                 "\"inner\":{\"module\":{\"items\":[1]}}},"
+                 "\"1\":{\"id\":1,\"name\":\"Foo\","
+                 "\"visibility\":\"public\","
+                 "\"inner\":{\"struct\":{\"kind\":{\"plain\":"
+                 "{\"fields\":[]}},\"impls\":[10,20]}}},"
+                 "\"10\":{\"id\":10,\"name\":null,"
+                 "\"visibility\":\"default\",\"attrs\":[],"
+                 "\"inner\":{\"impl\":{\"trait\":null,\"items\":[11],"
+                 "\"is_synthetic\":false,\"blanket_impl\":null}}},"
+                 "\"11\":{\"id\":11,\"name\":\"own\","
+                 "\"visibility\":\"public\","
+                 "\"inner\":{\"function\":{\"header\":{}}}},"
+                 "\"20\":{\"id\":20,\"name\":null,"
+                 "\"visibility\":\"default\","
+                 "\"attrs\":[\"automatically_derived\"],"
+                 "\"inner\":{\"impl\":{\"trait\":{\"path\":\"Hash\"},"
+                 "\"items\":[21],\"is_synthetic\":false,"
+                 "\"blanket_impl\":null}}},"
+                 "\"21\":{\"id\":21,\"name\":\"hash\","
+                 "\"visibility\":\"default\","
+                 "\"inner\":{\"function\":{\"header\":{}}}}}}")
+                :object-type 'hash-table))
+         (root (crate-tree--items json))
+         (foo (car (crate-tree-item-children root))))
+    (should (equal (crate-tree-item-name foo) "Foo"))
+    (should (equal (mapcar #'crate-tree-item-name
+                           (crate-tree-item-children foo))
+                   '("own")))
+    (should-not (string-match-p "hash" (crate-tree--structure-text root)))))
+
 (ert-deftest crate-tree-items-spans ()
   "An item carries its file and line, and an impl carries none."
   (crate-tree-test--with-root

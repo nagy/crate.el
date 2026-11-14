@@ -161,7 +161,11 @@ associated item (no impl method, no trait member).
 
 Children come from four places: `module.items`, `trait.items`, the
 fields and variants of a type, and the impls that the type lists.  A
-synthetic impl and a blanket impl drop.  A trait impl that the crate
+synthetic impl, a blanket impl and a derived impl drop.  Rustdoc tags
+an impl that a derive macro wrote with `automatically_derived`, and
+that tag covers a built-in derive such as `Clone` and a proc-macro
+derive such as serde's `Serialize` alike, so `crate-tree--impl-entries`
+drops the whole impl and its methods.  A trait impl that the crate
 writes itself stays, because `cargo-modules` prints its methods under
 the type.  Rustdoc leaves the visibility of those members implicit
 (`default`), and `cargo-modules` prints `pub(crate)`, so the parser

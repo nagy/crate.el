@@ -219,7 +219,9 @@ string."
 (defun crate-tree--impl-entries (index inner)
   "Return (ID . TRAIT-IMPL-P) entries from INDEX for the impls of INNER.
 A synthetic impl and a blanket impl drop, because rustdoc writes one
-for every type and `cargo-modules' prints none of them.  A trait
+for every type and `cargo-modules' prints none of them.  A derived
+impl drops too: rustdoc tags it with `automatically_derived', and its
+`clone' or `fmt' method says nothing that the type does not.  A trait
 impl that the crate writes itself stays: `cargo-modules' shows its
 methods under the type."
   (let (entries)
@@ -228,6 +230,8 @@ methods under the type."
                   (impl (gethash "impl" (gethash "inner" impl-item)))
                   ((hash-table-p impl))
                   ((not (eq t (gethash "is_synthetic" impl))))
+                  ((not (member "automatically_derived"
+                                (crate-tree--attrs impl-item))))
                   (blanket (gethash "blanket_impl" impl))
                   ((or (null blanket) (eq blanket :null))))
         (let ((trait (gethash "trait" impl)))
