@@ -11,6 +11,10 @@
   # build compiles evil-crate.el against it and the suite runs with it
   # on the load path.
   evil ? emacsPackages.evil,
+  # cargo, which the interactive `crate-visit-directory' command runs.
+  # The build writes its store path into the `crate-cargo-program'
+  # default, so an installed package needs no cargo on PATH.
+  cargo ? pkgs.cargo,
   # Fixture SQLite database the ERT suite runs against.  Passed in
   # explicitly so the expression has no hidden dependency on a peer
   # file; the flake wires up nix/test-crates-db.nix.
@@ -38,6 +42,8 @@ melpaBuild {
 
   turnCompilationWarningToError = true;
 
+  nativeBuildInputs = [ cargo ];
+
   # `packageRequires' tells the package set what to propagate, but it
   # does not put anything on the load path of this build, so the build
   # and the check run through a wrapper Emacs that carries the declared
@@ -47,18 +53,25 @@ melpaBuild {
     export PATH="${emacsWithDeps}/bin:$PATH"
   '';
 
-  # Two substitutions, both only visible inside the build:
+  # Three substitutions, all only visible inside the build:
   # * the fixture database path, so the suite need not reach for a
   #   hard-coded path;
   # * the version in the package header, which must agree with the
   #   `version' argument or `require' and package.el disagree after
   #   installation.  The pattern spells the header default, so a bump
-  #   of `0.1.0' above changes both places.
+  #   of `0.1.0' above changes both places;
+  # * the cargo that `crate-visit-directory' runs, so the installed
+  #   command works without a cargo on PATH.  The pattern spells the
+  #   default of `crate-cargo-program', so a change there changes the
+  #   pattern too.
   postPatch = ''
     substituteInPlace test/crate-test.el \
       --replace-fail '@testCratesDb@' ${testCratesDb}
     substituteInPlace crate.el \
       --replace-fail ';; Version: 0.1.0' ';; Version: ${version}'
+    substituteInPlace crate.el \
+      --replace-fail '(defcustom crate-cargo-program "cargo"' \
+                     '(defcustom crate-cargo-program "${lib.getExe cargo}"'
   '';
 
   checkPhase = ''

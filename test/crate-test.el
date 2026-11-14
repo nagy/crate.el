@@ -2427,5 +2427,332 @@ callers must filter them by checking for :null."
     ;; ID 99 is dangling: item 1 survives, dangling entry is dropped.
     (should (= (length tree) 1))
     (should (equal (car (car tree)) "foo"))))
+
+
+;;; Local crates
+
+(ert-deftest crate-local-dependency-row-registry ()
+  "A registry dependency keeps its requirement and carries no source."
+  (let ((row (crate-local--dependency-row
+              (crate-test--cargo-dependency "serde" :req "^1.0"
+                                            :source "registry+https://index")
+              "/crates/mycrate")))
+    (should (equal (car row) "serde"))
+    (should (equal (nth 1 row) "^1.0"))
+    (should (equal (nth 2 row) "normal"))
+    (should (= (nth 3 row) 0))
+    (should-not (nth 4 row))
+    ;; A database row keeps the bare requirement, a local one reads
+    ;; like the Cargo.toml line that names it.
+    (should (equal (crate--dependency-target row nil) "^1.0"))
+    (should (equal (crate--dependency-target row t) "= \"1.0\""))))
+
+(ert-deftest crate-local-dependency-row-path ()
+  "A path dependency names its directory and its kind."
+  (let ((row (crate-local--dependency-row
+              (crate-test--cargo-dependency "my-util" :kind "dev"
+                                            :optional t
+                                            :path "/crates/my-util")
+              "/crates/mycrate")))
+    (should (equal (nth 2 row) "dev"))
+    (should (= (nth 3 row) 1))
+    (should (equal (nth 4 row) '("path" . "../my-util")))
+    (should (equal (crate--dependency-target row t)
+                   "{ path = \"../my-util\" }"))
+    (should (equal (crate--dependency-note row) "  dev  (optional)"))))
+
+(ert-deftest crate-local-dependency-row-git ()
+  "A git dependency drops the source scheme and the commit fragment."
+  (let* ((row (crate-local--dependency-row
+               (crate-test--cargo-dependency
+                "some-git" :source "git+https://github.com/x/y#abc1234")
+               "/crates/mycrate"))
+         (spec (nth 4 row)))
+    (should (equal (car spec) "git"))
+    (should (equal (cdr spec) "https://github.com/x/y"))
+    (should (equal (crate--dependency-target row t)
+                   "{ git = \"https://github.com/x/y\" }"))
+    (should (equal (crate--dependency-note row) ""))))
+
+(ert-deftest crate-local-package-picks-the-workspace-member ()
+  "A workspace directory answers the package whose manifest matches."
+  (let* ((dir (make-temp-file "crate-local-ws-" t))
+         (manifest (expand-file-name "Cargo.toml" dir))
+         (json (crate-test--cargo-metadata
+                manifest :name "my-crate" :workspace-mate "/tmp/mate/Cargo.toml")))
+    (unwind-protect
+        (progn
+          (should (= (length (gethash "packages" json)) 2))
+          (should (equal (gethash "name" (crate-local--package json manifest))
+                         "my-crate")))
+      (delete-directory dir t))))
+
+(ert-deftest crate-local-record-maps-metadata ()
+  "`crate-local--record' maps `cargo metadata' onto a crate record."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (json (crate-test--cargo-metadata
+                  manifest
+                  :name "my-crate"
+                  :description "A demo crate."
+                  :license "MIT OR Apache-2.0"
+                  :dependencies (list (crate-test--cargo-dependency
+                                       "serde" :req "^1.0")))))
+      (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json)))
+        (let ((record (crate-local--record dir)))
+          (should (equal (gethash "name" record) "my-crate"))
+          (should (equal (gethash "latest_version" record) "0.3.0"))
+          (should (equal (gethash "license" record) "MIT OR Apache-2.0"))
+          (should (equal (gethash "description" record) "A demo crate."))
+          (should (equal (gethash "path" record) (directory-file-name dir)))
+          ;; A JSON null adds no key at all.
+          (should-not (gethash "homepage" record))
+          (should (= (length (gethash "dependencies" record)) 1)))))))
+
+(ert-deftest crate-local-record-memoized ()
+  "A second `crate-local--record' call reuses the metadata of the first."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (calls 0)
+           (json (crate-test--cargo-metadata manifest :name "my-crate")))
+      (let ((crate--data-cache (make-hash-table :test 'equal)))
+        (cl-letf (((symbol-function 'crate-local--metadata)
+                   (lambda (_dir) (cl-incf calls) json)))
+          (should (crate-local--record dir))
+          (should (crate-local--record dir))
+          (should (= calls 1))
+          (crate-local--forget dir)
+          (should (crate-local--record dir))
+          (should (= calls 2)))))))
+
+(ert-deftest crate-local-record-without-cargo ()
+  "A directory whose metadata cannot be read answers nil."
+  (crate-test--with-local-crate dir
+    (let ((crate--data-cache (make-hash-table :test 'equal)))
+      (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) nil)))
+        (should-not (crate-local--record dir))))))
+
+(ert-deftest crate-local-metadata-uses-the-cargo-option ()
+  "`crate-local--metadata' resolves `crate-cargo-program'."
+  (let ((crate-cargo-program "/mock/bin/cargo")
+        (asked nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (program) (setq asked program) nil)))
+      (should-not (crate-local--metadata "/crates/mycrate"))
+      (should (equal asked "/mock/bin/cargo")))))
+
+(ert-deftest crate-local-metadata-off-with-nil ()
+  "A nil `crate-cargo-program' turns the local read off."
+  (let ((crate-cargo-program nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (_program) (error "Must not probe for cargo"))))
+      (should-not (crate-local--metadata "/crates/mycrate")))))
+
+(ert-deftest crate-local-metadata-parses-the-command ()
+  "`crate-local--metadata' runs the documented arguments and parses."
+  (let ((crate-cargo-program "cargo")
+        (args nil)
+        (dir nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (_program) "/mock/bin/cargo"))
+              ((symbol-function 'call-process)
+               (lambda (_program _infile _destination _display &rest rest)
+                 (setq args rest dir default-directory)
+                 (insert "{\"packages\": []}")
+                 0)))
+      (let ((json (crate-local--metadata "/crates/mycrate")))
+        (should (equal args '("metadata" "--no-deps" "--offline"
+                              "--format-version" "1")))
+        (should (equal dir (file-name-as-directory
+                            (expand-file-name "/crates/mycrate"))))
+        (should (equal (gethash "packages" json) []))))))
+
+(ert-deftest crate-local-read-directory-completes-directories-only ()
+  "The prompt completes file names and keeps only directories."
+  (let ((dir (make-temp-file "crate-local-read-" t))
+        (seen nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "sub" dir))
+          (with-temp-file (expand-file-name "file.txt" dir) (insert "x"))
+          (let ((candidates (all-completions (file-name-as-directory dir)
+                                             #'completion-file-name-table
+                                             #'file-directory-p)))
+            (should (member "sub/" candidates))
+            (should-not (member "file.txt" candidates)))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest args) (setq seen args) (concat dir "sub/"))))
+            (should (equal (crate-local--read-directory) (concat dir "sub/"))))
+          (should (eq (indirect-function (nth 1 seen))
+                      (indirect-function 'completion-file-name-table)))
+          (should (eq (indirect-function (nth 2 seen))
+                      (indirect-function 'file-directory-p))))
+      (delete-directory dir t))))
+
+(ert-deftest crate-visit-directory-shows-the-local-crate ()
+  "`crate-visit-directory' renders a detail buffer from local metadata."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (json (crate-test--cargo-metadata
+                  manifest
+                  :name "my-crate"
+                  :description "A demo crate."
+                  :license "MIT"
+                  :repository "https://example.com/r"
+                  :dependencies
+                  (list (crate-test--cargo-dependency "serde" :req "^1.0")
+                        (crate-test--cargo-dependency
+                               "my-util" :path (expand-file-name "../my-util" dir))))))
+      (let ((buffer-name (format "Crate: my_crate (%s)" (directory-file-name dir))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                      ((symbol-function 'crate--dependents) #'ignore)
+                      ((symbol-function 'crate-doc--start-build)
+                       (lambda (&rest _) (error "Local crate must not build")))
+                      ((symbol-function 'switch-to-buffer)
+                       (lambda (name &optional _norecord)
+                         (set-buffer (get-buffer-create name))
+                         name)))
+              (crate-visit-directory dir)
+              (should (equal (buffer-name) buffer-name))
+              (should (equal crate-name "my_crate"))
+              (should (equal crate-local-path (directory-file-name dir)))
+              (should (equal default-directory (file-name-as-directory dir)))
+              (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p "Version: *0\\.3\\.0" content))
+                (should (string-match-p "License: *MIT" content))
+                (should (string-match-p "Repository: .*example[.]com/r" content))
+                (should (string-match-p "serde *= *\"1[.]0\"" content))
+                (should (string-match-p "my-util *[{] path = \"[.][.]/my-util\" }" content))
+                ;; No Modules section, because no rustdoc build feeds it.
+                (should-not (string-match-p "Modules" content)))
+              ;; A registry dependency is still a link, a path one is not.
+              (goto-char (point-min))
+              (search-forward "serde")
+              (goto-char (match-beginning 0))
+              (should (equal (thing-at-point 'url t)
+                             (concat crate--crates-io-url "serde")))
+              (search-forward "my-util")
+              (goto-char (match-beginning 0))
+              (should-not (thing-at-point 'url t)))
+        (when (get-buffer buffer-name) (kill-buffer buffer-name)))))))
+
+(ert-deftest crate-visit-directory-requires-a-manifest ()
+  "A directory without `Cargo.toml' signals a user error."
+  (let ((dir (make-temp-file "crate-local-empty-" t)))
+    (unwind-protect
+        (should-error (crate-visit-directory dir) :type 'user-error)
+      (delete-directory dir t))))
+
+(ert-deftest crate-visit-directory-requires-cargo-metadata ()
+  "A manifest that cargo cannot read signals a user error."
+  (crate-test--with-local-crate dir
+    (let ((crate--data-cache (make-hash-table :test 'equal)))
+      (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) nil)))
+        (should-error (crate-visit-directory dir) :type 'user-error)))))
+
+(ert-deftest crate-visit-directory-keeps-the-published-buffer ()
+  "A local crate and its published namesake keep separate buffers."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (local-name (format "Crate: my_crate (%s)" (directory-file-name dir)))
+           (json (crate-test--cargo-metadata manifest :name "my-crate"))
+           (crate-data-path "/mock-crates.db"))
+      (unwind-protect
+          (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                    ((symbol-function 'crate--dependents) #'ignore)
+                    ((symbol-function 'crate--crate)
+                     (lambda (_name) (crate-test--data-hash :name "my-crate")) )
+                    ((symbol-function 'crate--database-readable-p) (lambda () t))
+                    ((symbol-function 'switch-to-buffer)
+                     (lambda (name &optional _norecord)
+                       (set-buffer (get-buffer-create name))
+                       name)))
+            (find-crate "my-crate")
+            (crate-visit-directory dir)
+            (should (get-buffer "Crate: my_crate"))
+            (should (get-buffer local-name))
+            (should-not (eq (get-buffer "Crate: my_crate")
+                            (get-buffer local-name))))
+        (when (get-buffer local-name) (kill-buffer local-name))
+        (when (get-buffer "Crate: my_crate") (kill-buffer "Crate: my_crate"))))))
+
+(ert-deftest crate-visit-directory-revert-rereads-the-manifest ()
+  "`g' reads the metadata again, so an edited crate shows the edit."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (first (crate-test--cargo-metadata manifest :description "Old."))
+           (second (crate-test--cargo-metadata manifest :description "New.")
+                   )
+           (json first)
+           (buffer-name (format "Crate: my_crate (%s)" (directory-file-name dir))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                    ((symbol-function 'crate--dependents) #'ignore)
+                    ((symbol-function 'switch-to-buffer)
+                     (lambda (name &optional _norecord)
+                       (set-buffer (get-buffer-create name))
+                       name)))
+            (crate-visit-directory dir)
+            (should (string-match-p "Old\." (buffer-string)))
+            (setq json second)
+            (crate--revert)
+            (should (string-match-p "New\." (buffer-string)))
+            (should-not (string-match-p "Old\." (buffer-string))))
+        (when (get-buffer buffer-name) (kill-buffer buffer-name))))))
+
+(ert-deftest crate-visit-hook-runs-for-a-local-crate ()
+  "`crate-visit-hook' fires once in the local crate buffer."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (json (crate-test--cargo-metadata manifest :name "my-crate"))
+           (buffer-name (format "Crate: my_crate (%s)" (directory-file-name dir)))
+           (seen nil))
+      (unwind-protect
+          (let ((crate-visit-hook nil))
+            (add-hook 'crate-visit-hook
+                      (lambda ()
+                        (push (list (buffer-name) crate-name crate-local-path)
+                              seen)))
+            (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                      ((symbol-function 'crate--dependents) #'ignore)
+                      ((symbol-function 'switch-to-buffer)
+                       (lambda (name &optional _norecord)
+                         (set-buffer (get-buffer-create name))
+                         name)))
+              (crate-visit-directory dir))
+            (should (equal seen
+                           (list (list buffer-name "my_crate"
+                                       (directory-file-name dir))))))
+        (when (get-buffer buffer-name) (kill-buffer buffer-name))))))
+
+(ert-deftest crate-local-crate-bookmark-round-trip ()
+  "A local crate bookmark records its directory and reopens it."
+  (crate-test--with-local-crate dir
+    (let ((path (directory-file-name dir))
+          (json (crate-test--cargo-metadata
+                 (expand-file-name "Cargo.toml" dir) :name "my-crate"))
+          (seen nil))
+      (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                ((symbol-function 'crate--dependents) #'ignore)
+                ((symbol-function 'crate--description) (lambda () "desc"))
+                ((symbol-function 'switch-to-buffer)
+                 (lambda (name &optional _norecord)
+                        (set-buffer (get-buffer-create name))
+                        name)))
+        (let ((buffer-name (format "Crate: my_crate (%s)" path)))
+          (unwind-protect
+              (progn
+                (crate-visit-directory dir)
+                (let ((record (crate--bookmark-make-record-function)))
+                  (should (equal (bookmark-prop-get record 'directory) path))
+                  (should (equal (bookmark-prop-get record 'crate) "my_crate"))
+                  (should (string-match-p (regexp-quote path) (car record)))
+                  (cl-letf (((symbol-function 'crate-visit-directory)
+                             (lambda (d) (setq seen d))))
+                    (crate-bookmark-jump record))
+                  (should (equal seen path))))
+            (when (get-buffer buffer-name) (kill-buffer buffer-name))))))))
+
 (provide 'crate-test)
 ;;; crate-test.el ends here

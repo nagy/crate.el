@@ -4,8 +4,9 @@
 
 Single-package Emacs project (`crate.el`) providing an interactive
 interface for browsing Rust crates from a local crates.io SQLite
-database.  Browse URL handler integration redirects crates.io
-URLs to `find-crate`.
+database, plus a detail view of a local crate directory through
+`cargo metadata`.  Browse URL handler integration redirects
+crates.io URLs to `find-crate`.
 
 ## Build & test
 
@@ -47,6 +48,11 @@ The version follows the house scheme for an unreleased package:
 `self.sourceInfo.lastModifiedDate` and passes it to the package
 expression; `postPatch` writes the same string into the `;; Version:`
 header of `crate.el`, so the header and the package directory agree.
+The same `postPatch` writes `lib.getExe pkgs.cargo` into the
+`crate-cargo-program` default, so the installed
+`crate-visit-directory` runs a cargo from the store and needs none
+on `PATH`.  `cargo` is a `nativeBuildInputs` entry for that
+reference.
 
 Byte-compile with warnings as errors (wired into the Nix
 build's checkPhase for all elisp files — crate.el, ol-crate.el,
@@ -130,62 +136,69 @@ is nil. Callers must use `(cadddr item)` to get docs:
 `crate.el` sections roughly:
 
 1. Forward declarations and buffer-local state (`defvar-local`
-   with `permanent-local` for `crate-name`, `crate-data`)
+   for `crate-name`, `crate-data` and `crate-local-path`)
 2. defgroup / defcustom (including `crate--crates-io-url`
-   `defconst`, and the limit custom options `crate-completion-limit`
-   and `crate-dependents-limit`)
+   `defconst`, `crate-cargo-program`, and the limit custom options
+   `crate-completion-limit` and `crate-dependents-limit`)
 3. Cache (hash-table vars, `with-memoization`, cache keys include
    `crate-data-path` for self-invalidation; `crate--list` for the
    whole table, `crate--crate` for one record, `crate--crates-columns`
    and its two SQL constants)
-4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--start-build`,
+4. Local Crates (`crate-local--manifest`, `crate-local--metadata`,
+   `crate-local--package`, `crate-local--dependency-row`,
+   `crate-local--entry`, `crate-local--record`,
+   `crate-local--forget`, `crate-local--read-directory`; the
+   `cargo metadata` path that builds a crate record without the
+   database)
+5. Doc Build (`crate-doc-enable` defcustom, `crate-doc--start-build`,
    `crate-doc--json-from-build`, `crate-doc--json`,
    `crate-doc--module-tree`)
-5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
+6. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
    `crate--dependents-data`, `crate--format-downloads`)
-6. Faces (`defface` definitions, `crate-font-lock-keywords`)
-7. Text Buttons and Point Keeping (`crate-link` button type,
+7. Faces (`defface` definitions, `crate-font-lock-keywords`)
+8. Text Buttons and Point Keeping (`crate-link` button type,
    `crate--line-record` and the restore helpers, which keep point
    across the erase of a render)
-8. Sections (`crate-detail-sections-hook`, `crate-detail-fields`, and
+9. Sections (`crate-detail-sections-hook`, `crate-detail-fields`, and
    the inserters `crate-insert-fields`, `crate-insert-field`,
-   `crate-insert-dependencies`, `crate-insert-dependents`,
-   `crate-insert-modules`, `crate-insert-module-items`)
-9. Major Mode (`crate-mode`, derived from `magit-section-mode` for
-   the section tree, the folds and the keymap, plus `special-mode`
-   read-only + `q`/`g` conventions; thin: only `setq-local` for
-   font-lock defaults, the two section options, `goto-address-mode`,
-   the bookmark record function and `revert-buffer-function`; `RET`
-   is `push-button`; content is inserted by `crate--render`, which
-   uses the `crate-name` / `crate-data` buffer-locals)
-10. Completion (`crate--match-names`, `crate--annotate`,
-   `crate--collection`, `crate-refresh-cache`)
-11. Marginalia (`crate--marginalia-annotator`, registered for
+   `crate--dependencies`, `crate-insert-dependencies`,
+   `crate-insert-dependents`, `crate-insert-modules`,
+   `crate-insert-module-items`)
+10. Major Mode (`crate-mode`, derived from `magit-section-mode` for
+    the section tree, the folds and the keymap, plus `special-mode`
+    read-only + `q`/`g` conventions; thin: only `setq-local` for
+    font-lock defaults, the two section options, `goto-address-mode`,
+    the bookmark record function and `revert-buffer-function`; `RET`
+    is `push-button`; content is inserted by `crate--render`, which
+    uses the `crate-name` / `crate-data` buffer-locals)
+11. Completion (`crate--match-names`, `crate--annotate`,
+    `crate--collection`, `crate-refresh-cache`)
+12. Marginalia (`crate--marginalia-annotator`, registered for
     `crate` category)
-12. Interactive Commands (`find-crate`, `crate-browse-url`,
-    `crate-install-browse-url-handler`; `find-crate` is the single
-    funnel for all entry points — interactive, URL handler, browse
-    visit, bookmarks, dependency buttons — and runs
-    `crate-visit-hook` at the end, after `crate-name` and
-    `crate-data` are set and the buffer rendered; the window comes
-    from `crate-display-buffer-action`; the record comes from
-    `crate--crate`, so a visit reads one row)
-13. Bookmarks (`crate--bookmark-make-record-function`,
+13. Interactive Commands (`find-crate`, `crate-visit-directory`,
+    `crate-browse-url`, `crate-install-browse-url-handler`;
+    `find-crate` is the single funnel for every database entry
+    point — interactive, URL handler, browse visit, bookmarks,
+    dependency buttons — and runs `crate-visit-hook` at the end,
+    after `crate-name` and `crate-data` are set and the buffer
+    rendered; the window comes from `crate-display-buffer-action`;
+    the record comes from `crate--crate`, so a visit reads one row)
+14. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
-14. Org Integration (deferred load of `ol-crate`)
-15. Evil Integration (deferred load of `evil-crate` when evil loads,
+15. Org Integration (deferred load of `ol-crate`)
+16. Evil Integration (deferred load of `evil-crate` when evil loads,
     and the `crate-evil-auto-setup` call)
-16. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
+17. Browse Mode (`crate-browse-mode`, `crate-browse-crates`,
     bookmark support for filtered views)
-17. Dependency Copy (`crate-copy-dependency`, bound to `w` in
+18. Dependency Copy (`crate-copy-dependency`, bound to `w` in
     `crate-mode-map`, `crate-browse-mode-map`, and
     `crate-embark-map`; copies `NAME = "VERSION"` for
     `Cargo.toml`)
-18. Cargo.toml Integration (`crate-cargo-completion-at-point`,
+19. Cargo.toml Integration (`crate-cargo-completion-at-point`,
     `crate-install-cargo-toml-capf`, `crate-cargo-toml-modes` —
     crate-name completion in `[dependencies]` family sections,
     soft TOML-mode dep via the modes list)
-19. Embark (action keymap `crate-embark-map`, export function,
+20. Embark (action keymap `crate-embark-map`, export function,
     category registration)
 
 ## Conventions
@@ -346,6 +359,45 @@ for both spellings (`crate--crate-spellings`): `async-trait` and
 `async_trait`.  Two spellings suffice, measured on a full dump of
 358 423 names: no published name mixes both separators, and no two
 names share a canonical form.
+
+### Local crates go through `cargo metadata`
+
+`crate-visit-directory` opens the crate of a directory that holds a
+`Cargo.toml`, and no database touches that path.  `crate-local--metadata`
+runs `cargo metadata --no-deps --offline` in the directory through
+`crate-cargo-program` (nil turns the command off), and
+`crate-local--entry` maps the package onto the shape of a
+`crates` row, so every section inserter works on both sources
+unchanged.  `--no-deps` reads the manifest and the workspace only,
+which is why the command needs no network and no lockfile.
+
+`crate-local-path` is the one buffer-local that tells the two
+sources apart.  `crate--dependencies` reads `crate-data` for a
+local crate and `crate--deps` for a database crate,
+`crate--insert-repository` makes the crate directory the
+`default-directory`, and `crate-insert-modules` shows no section,
+because no rustdoc build feeds a local crate yet.  The variable is
+set after `crate-mode`, like `crate-name`.
+
+A local record memoizes in `crate--data-cache` under
+`(list 'local MANIFEST)`, with the same `:failed` sentinel as the
+other caches, so `crate-refresh-cache` drops it.  `crate--revert`
+forgets the entry first, so `g' picks up an edited description or
+dependency list.
+
+A local crate keeps its own buffer, `Crate: <name> (<path>)`,
+because it must not replace the published crate of the same name.
+The bookmark record carries the directory, and `crate-bookmark-jump`
+dispatches on it.
+
+A dependency row of a local crate has the database shape plus a
+`(KIND . TARGET)` source spec in its fifth slot.  Cargo answers a
+path dependency as an absolute name, so the row makes it relative
+to the crate directory and reads like the manifest line.  A
+registry dependency carries no spec and prints `= "1.0"`, a path
+or a git dependency prints `{ path = "../foo" }` or
+`{ git = "URL" }`, and only the registry row is a `crate-link`
+button, because the other two have no crates.io page.
 
 ### One crate record, not the whole table
 
@@ -862,6 +914,19 @@ tests skip in a plain shell and run inside the Nix build.
   crate name, suitable as the return value of `crate-list-json`.
 - `crate-test--with-crate` macro binds `crate-name` and `crate-data`
   for testing functions that read those buffer-local variables.
+- `crate-test--cargo-metadata` builds parsed `cargo metadata` JSON for
+  a package, and `crate-test--cargo-dependency` builds one dependency.
+  Both round-trip through `json-serialize`, so the fixture has the
+  shape `json-parse-buffer` answers, keywords for null included.  A
+  test mocks `crate-local--metadata` to answer the fixture, so no
+  test needs cargo.
+- `crate-test--with-local-crate` creates a temporary directory with a
+  `Cargo.toml` and binds it, so a local-crate test needs no source
+  tree.
+- A local-crate test that renders must mock `crate--dependents`, and
+  the `switch-to-buffer` mock has to answer
+  `(get-buffer-create name)`, because `crate--display-buffer` names a
+  buffer that does not exist yet.
 - Mock `find-crate`, `switch-to-buffer`, and
   `org-link-store-props` with `cl-letf` on `symbol-function`.
 - Hash tables with identical content are not `equal` in Elisp —
@@ -912,6 +977,7 @@ tests skip in a plain shell and run inside the Nix build.
 | Dependency | Required? | Why |
 |-----------|-----------|-----|
 | Emacs 30.1 | yes | `json-parse-buffer`, `with-memoization`, `string-replace`, `cl-labels` |
+| cargo | soft | required only by `crate-visit-directory`, which reads a local crate through `cargo metadata --no-deps`; the option is `crate-cargo-program`, and the Nix build pins it |
 | ol (org) | soft | org link support via `ol-crate.el` |
 | bookmark | yes | built-in, used for crate bookmarks |
 | browse-url | soft | crates.io URL handler via `crate-install-browse-url-handler` |

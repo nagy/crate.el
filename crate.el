@@ -25,7 +25,8 @@
 ;;; Commentary:
 
 ;; This package provides an interactive interface for browsing Rust
-;; crates from a local crates.io SQLite database.
+;; crates from a local crates.io SQLite database, and a detail view of
+;; a local crate directory.
 ;;
 ;; Data sources are configurable via `defcustom':
 ;;
@@ -34,6 +35,7 @@
 ;; Commands:
 ;;
 ;;   M-x find-crate  -- look up a Rust crate by name
+;;   M-x crate-visit-directory -- show the crate of a local directory
 ;;   M-x crate-copy-dependency -- copy a Cargo.toml dependency line
 ;;   M-x crate-install-cargo-toml-capf -- crate names in Cargo.toml
 ;;
@@ -76,6 +78,11 @@
   "Name of the crate that the current buffer shows.")
 (defvar-local crate-data nil
   "Record of the crate that the current buffer shows.")
+(defvar-local crate-local-path nil
+  "Directory of the local crate that the current buffer shows.
+nil in a buffer of a crates.io crate.  It tells `crate--dependencies'
+and `crate--insert-repository' that the record of the buffer comes
+from `cargo metadata' and not from the SQLite database.")
 
 (defgroup crate nil
   "Browse Rust crates from a local SQLite database."
@@ -96,6 +103,17 @@ the pretty form.  Lookups use canonical names (see
 All caches key on this path, so changing it — even via plain
 `setq' — serves fresh data with no `crate-refresh-cache' call."
   :type 'file
+  :group 'crate)
+
+(defcustom crate-cargo-program "cargo"
+  "Cargo executable that `crate-visit-directory' runs.
+The value goes through `executable-find', so a bare name searches
+the variable `exec-path' and an absolute file name is used as it
+stands.  The Nix build substitutes the store path of the packaged
+cargo, so an installed package needs no cargo on `PATH'.  Set it
+to nil to turn the local-crate command off."
+  :type '(choice (const :tag "Off" nil)
+                 (file :tag "Cargo executable"))
   :group 'crate)
 
 
@@ -184,8 +202,12 @@ single place all entry points converge: interactive `find-crate',
 crates.io URL handling, `crate-browse-visit', bookmarks, and
 dependency buttons.
 
-Functions may use the buffer-local `crate-name' and `crate-data'
-to, e.g., set `default-directory' to a local checkout."
+`crate-visit-directory' runs the hook too, after it sets
+`crate-local-path'.
+
+Functions may use the buffer-local `crate-name', `crate-data' and
+`crate-local-path' to, e.g., set `default-directory' to a local
+checkout."
   :type 'hook
   :group 'crate)
 
@@ -381,6 +403,130 @@ look the same to `crate--crate'."
                  (progn (sqlite-select db "SELECT name FROM crates LIMIT 1") t)
                (sqlite-close db)))
          (error nil))))
+
+
+;;; Local Crates
+
+;; A local crate is a directory that holds a `Cargo.toml', so it has
+;; no row in the crates.io database.  `cargo metadata' answers the
+;; fields and the dependency list of that directory, and the command
+;; maps the answer onto the same record that a database row builds, so
+;; every section inserter works on both sources unchanged.
+
+(defun crate-local--manifest (dir)
+  "Return the manifest path of the Cargo package in DIR."
+  (declare (pure t) (side-effect-free t))
+  (expand-file-name "Cargo.toml" (file-name-as-directory (expand-file-name dir))))
+
+(defun crate-local--metadata (dir)
+  "Return the `cargo metadata' JSON of the package in DIR, or nil.
+`--no-deps' keeps the query local: cargo reads the manifest and the
+workspace, resolves no dependency and downloads nothing, and
+`--offline' guarantees that promise.  A directory without a
+manifest, a nil `crate-cargo-program', a missing cargo and a
+failing call all answer nil."
+  (when-let* ((program crate-cargo-program)
+              (cargo (executable-find program)))
+    (with-temp-buffer
+      (when (eq 0 (let ((default-directory
+                         (file-name-as-directory (expand-file-name dir))))
+                    (call-process cargo nil '(t nil) nil
+                                  "metadata" "--no-deps" "--offline"
+                                  "--format-version" "1")))
+        (goto-char (point-min))
+        (condition-case nil
+            (json-parse-buffer)
+          (error nil))))))
+
+(defun crate-local--package (json manifest)
+  "Return the package of `cargo metadata' JSON that MANIFEST names.
+A directory inside a workspace answers every package of that
+workspace, so the package whose `manifest_path' is MANIFEST wins,
+and the first package answers as a fallback."
+  (declare (side-effect-free t))
+  (when-let* ((packages (gethash "packages" json)))
+    (or (seq-find (lambda (package)
+                    (equal (expand-file-name (gethash "manifest_path" package))
+                           (expand-file-name manifest)))
+                  packages)
+        (car packages))))
+
+(defun crate-local--git-url (source)
+  "Return the web URL that git SOURCE names.
+SOURCE reads `git+https://github.com/nagy/crate.el#abc1234', so the
+`git+' scheme and the commit fragment both go."
+  (declare (pure t) (side-effect-free t))
+  (let ((url (string-remove-prefix "git+" source)))
+    (if-let* ((hash (string-search "#" url)))
+        (substring url 0 hash)
+      url)))
+
+(defun crate-local--dependency-row (dep dir)
+  "Return a dependency row for the `cargo metadata' dependency DEP.
+DIR is the crate directory.  The row has the shape of a
+`dependencies' database row, `(NAME REQ KIND OPTIONAL)', plus a
+`(KIND . TARGET)' source spec that says where the code of a path
+or a git dependency lives.  A registry dependency carries no
+source spec, because its REQ says which version it names.  Cargo
+answers a path as an absolute name, so the row makes it relative
+to DIR and reads like the manifest line that names it."
+  (declare (side-effect-free t))
+  (let ((kind (gethash "kind" dep))
+        (optional (gethash "optional" dep))
+        (path (gethash "path" dep))
+        (source (gethash "source" dep)))
+    (list (gethash "name" dep)
+          (gethash "req" dep)
+          (if (or (null kind) (eq kind :null)) "normal" kind)
+          (if (eq optional t) 1 0)
+          (cond
+           ((stringp path)
+            (cons "path" (file-relative-name path (expand-file-name dir))))
+           ((and (stringp source) (string-prefix-p "git+" source))
+            (cons "git" (crate-local--git-url source)))))))
+
+(defun crate-local--entry (package dir)
+  "Return a crate record for the `cargo metadata' PACKAGE in DIR.
+The record takes the keys of a database record, so
+`crate-detail-fields' reads it, and it adds the `path' key, which a
+reader can show by adding `(path . \"Path\")' to the fields."
+  (declare (side-effect-free t))
+  (let ((entry (make-hash-table :test #'equal))
+        (path (directory-file-name (file-name-as-directory
+                                    (expand-file-name dir)))))
+    (dolist (key '("name" "description" "homepage" "repository"
+                   "documentation" "license"))
+      (let ((value (gethash key package)))
+        (unless (or (null value) (eq value :null))
+          (puthash key value entry))))
+    (when-let* ((version (gethash "version" package)))
+      (puthash "latest_version" version entry))
+    (puthash "path" path entry)
+    (puthash "dependencies"
+             (mapcar (lambda (dep) (crate-local--dependency-row dep dir))
+                     (gethash "dependencies" package))
+             entry)
+    entry))
+
+(defun crate-local--record (dir)
+  "Return the crate record of the local crate in DIR, or nil.
+Memoized in `crate--data-cache' under the manifest path, with a
+:failed sentinel for a directory that holds no crate and for a
+`cargo metadata' call that fails."
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (manifest (crate-local--manifest dir))
+         (cached (with-memoization
+                     (gethash (list 'local manifest) crate--data-cache)
+                   (or (when-let* ((json (crate-local--metadata dir))
+                                   (package (crate-local--package json manifest)))
+                         (crate-local--entry package dir))
+                       :failed))))
+    (unless (eq cached :failed)
+      cached)))
+
+(defun crate-local--forget (dir)
+  "Drop the cached record of the local crate in DIR."
+  (remhash (list 'local (crate-local--manifest dir)) crate--data-cache))
 
 
 ;;; Doc Build
@@ -937,13 +1083,16 @@ Nothing follows the label when the value is nil or a JSON null."
 `crate-repository-directory' maps the URL to a directory, and a
 directory that exists becomes the `default-directory' of the
 buffer, so a command that starts in a detail buffer starts in the
-checkout."
+checkout.  A local crate makes its own directory the
+`default-directory'."
   (crate--insert-value "repository")
-  (when-let* ((repo (gethash "repository" crate-data))
-              ((not (eq repo :null)))
-              (dir (crate--repository-directory repo)))
-    (when (file-exists-p dir)
-      (setq-local default-directory dir))))
+  (if crate-local-path
+      (setq-local default-directory (file-name-as-directory crate-local-path))
+    (when-let* ((repo (gethash "repository" crate-data))
+                ((not (eq repo :null)))
+                (dir (crate--repository-directory repo)))
+      (when (file-exists-p dir)
+        (setq-local default-directory dir)))))
 
 (defun crate--repository-directory (repo)
   "Return the local checkout directory of REPO, or nil.
@@ -979,27 +1128,60 @@ crate, so a crate without a documentation column still links."
   (dolist (field crate-detail-fields)
     (crate-insert-field (car field) (cdr field))))
 
+(defun crate--dependencies ()
+  "Return the dependency rows of the current crate.
+A local crate carries its rows in `crate-data', which
+`cargo metadata' filled, and a crates.io crate reads them from the
+database."
+  (if crate-local-path
+      (gethash "dependencies" crate-data)
+    (crate--deps crate-name)))
+
+(defun crate--dependency-target (dep local)
+  "Return the version or the source column of dependency row DEP.
+LOCAL non-nil means the row comes from `cargo metadata', so a
+registry dependency reads like a Cargo.toml line and a path or a
+git dependency shows the table that names its origin.  A database
+row keeps its bare requirement."
+  (declare (pure t) (side-effect-free t))
+  (if-let* ((source (nth 4 dep)))
+      (format "{ %s = \"%s\" }" (car source) (cdr source))
+    (if local
+        (format "= \"%s\"" (string-remove-prefix "^" (or (nth 1 dep) "*")))
+      (or (nth 1 dep) ""))))
+
+(defun crate--dependency-note (dep)
+  "Return the kind and optional note of dependency row DEP.
+A normal, required dependency carries no note."
+  (declare (pure t) (side-effect-free t))
+  (concat (when-let* ((kind (nth 2 dep))
+                      ((not (equal kind "normal"))))
+            (format "  %s" kind))
+          (when (memq (nth 3 dep) '(1 t))
+            "  (optional)")))
+
 (defun crate-insert-dependencies ()
   "Insert the Dependencies section of the current crate."
-  (when-let* ((deps (crate--deps crate-name)))
+  (when-let* ((deps (crate--dependencies)))
     (insert "\n")
     (magit-insert-section (crate-dependencies)
       (magit-insert-heading (crate--child-count (length deps))
                             "Dependencies")
       (dolist (dep deps)
         (let ((name (nth 0 dep))
-              (req (nth 1 dep))
-              (kind (nth 2 dep))
-              (optional (nth 3 dep)))
-          (insert-text-button name
-                              :type 'crate-link
-                              'action (lambda (_) (find-crate name))
-                              'help-echo (format "View crate: %s" name)
-                              'crate-url (concat crate--crates-io-url name))
+              (source (nth 4 dep)))
+          ;; A path or a git dependency has no crates.io page of its
+          ;; own, so its name stays plain text.
+          (if source
+              (insert name)
+            (insert-text-button name
+                                :type 'crate-link
+                                'action (lambda (_) (find-crate name))
+                                'help-echo (format "View crate: %s" name)
+                                'crate-url (concat crate--crates-io-url name)))
           (insert (make-string (max (- 40 (length name)) 1) ?\s)
-                  (format "%-12s %-8s%s"
-                          (or req "") kind
-                          (if (eq optional 1) "  (optional)" ""))
+                  (crate--dependency-target dep crate-local-path)
+                  (crate--dependency-note dep)
                   "\n"))))))
 
 (defun crate-insert-dependents ()
@@ -1032,23 +1214,26 @@ plus sign, so a reader does not mistake it for the whole list."
 The section holds a nested section per module and item once the
 rustdoc JSON is ready, and one status line otherwise.  It appears
 only when `crate-doc--json' answers, a build runs, or a build
-failed, so a crate with `crate-doc-enable' nil shows no section."
-  (let* ((json (crate-doc--json crate-name))
-         (tree (and json (crate-doc--module-tree json)))
-         (failed (gethash (list crate-name crate-data-path) crate-doc--cache))
-         (building (and crate-doc-enable
-                        (gethash crate-name crate-doc--in-flight))))
-    (when (or json failed building)
-      (insert "\n")
-      (magit-insert-section (crate-modules)
-        (magit-insert-heading (crate--module-count tree) "Modules")
-        (cond
-         (json
-          (crate-insert-module-items tree 0 ""))
-         (failed
-          (insert "(rustdoc unavailable)\n"))
-         (building
-          (insert "(rustdoc build in progress…)\n")))))))
+failed, so a crate with `crate-doc-enable' nil shows no section.
+A local crate started by `crate-visit-directory' shows no section
+either, because no rustdoc build feeds it yet."
+  (unless crate-local-path
+    (let* ((json (crate-doc--json crate-name))
+           (tree (and json (crate-doc--module-tree json)))
+           (failed (gethash (list crate-name crate-data-path) crate-doc--cache))
+           (building (and crate-doc-enable
+                          (gethash crate-name crate-doc--in-flight))))
+      (when (or json failed building)
+        (insert "\n")
+        (magit-insert-section (crate-modules)
+          (magit-insert-heading (crate--module-count tree) "Modules")
+          (cond
+           (json
+            (crate-insert-module-items tree 0 ""))
+           (failed
+            (insert "(rustdoc unavailable)\n"))
+           (building
+            (insert "(rustdoc build in progress…)\n"))))))))
 
 (defun crate-insert-module-items (items depth path)
   "Insert ITEMS of the module tree at DEPTH, inside the module PATH.
@@ -1098,8 +1283,9 @@ from `magit-section-mode-map', so they answer like a Magit buffer."
 
 \\{crate-mode-map}
 This mode is not intended to be invoked directly; use
-`find-crate' instead.  The buffer content is inserted by
-`crate--render' after the mode is set up.
+`find-crate' for a crates.io crate and `crate-visit-directory'
+for a local directory that holds a `Cargo.toml'.  The buffer
+content is inserted by `crate--render' after the mode is set up.
 
 The buffer is a tree of sections, so it reads and folds like a
 Magit buffer: \\[magit-section-toggle] folds the section at point,
@@ -1131,7 +1317,13 @@ link at point, which is a dependency crate name or a URL.
 (defun crate--revert (&optional _ignore-auto _noconfirm _preserve-modes)
   "Re-render the current crate buffer.
 `revert-buffer-function' for `crate-mode'.  Re-renders from the
-live `crate-name' / `crate-data' buffer-locals so `g' works."
+live `crate-name' / `crate-data' buffer-locals so `g' works.  A
+local crate reads its `Cargo.toml' again first, so `g' shows an
+edited description or dependency list."
+  (when crate-local-path
+    (crate-local--forget crate-local-path)
+    (when-let* ((record (crate-local--record crate-local-path)))
+      (setq-local crate-data record)))
   (crate--render))
 
 (defun crate--render ()
@@ -1288,6 +1480,50 @@ message naming the requested version.  Creates a new buffer named
         (crate--render)
         (run-hooks 'crate-visit-hook)))))
 
+(defun crate-local--read-directory ()
+  "Read the directory of a local crate with completion.
+`completion-file-name-table' completes the path, and the
+`file-directory-p' predicate keeps files out of the candidates,
+because a crate directory is the only answer that works."
+  (completing-read "Crate directory: "
+                   #'completion-file-name-table
+                   #'file-directory-p
+                   t nil 'file-name-history
+                   (expand-file-name default-directory)))
+
+;;;###autoload
+(defun crate-visit-directory (&optional dir)
+  "Display the Rust crate in local directory DIR in `crate-mode'.
+DIR defaults to `default-directory'.  The command reads the fields
+and the dependency list with `cargo metadata --no-deps', so
+`crate-cargo-program' must name a working cargo and DIR must hold
+a `Cargo.toml'.
+The buffer is named \"Crate: <name> (<path>)\", so a local crate
+and the published crate of the same name keep separate buffers.
+The buffer shows no Dependents and no Modules section for a crate
+that the database does not hold."
+  (interactive (list (crate-local--read-directory)))
+  (let ((dir (file-name-as-directory
+              (expand-file-name (or dir default-directory)))))
+    (unless (file-exists-p (crate-local--manifest dir))
+      (user-error "No Cargo.toml in `%s'" (directory-file-name dir)))
+    (let ((record (crate-local--record dir)))
+      (unless record
+        (user-error "Cannot read the crate metadata of `%s'"
+                    (directory-file-name dir)))
+      (let* ((name (crate--canonical-name (gethash "name" record)))
+             (bufname (format "Crate: %s (%s)" name
+                              (directory-file-name dir))))
+        (crate--display-buffer bufname)
+        (crate-mode)
+        ;; Set the crate locals after `crate-mode', whose
+        ;; `kill-all-local-variables' would otherwise wipe them.
+        (setq-local crate-name name)
+        (setq-local crate-data record)
+        (setq-local crate-local-path (directory-file-name dir))
+        (crate--render)
+        (run-hooks 'crate-visit-hook)))))
+
 
 ;;;###autoload
 (defun crate-browse-url (url &rest _args)
@@ -1309,22 +1545,30 @@ directly to `find-crate', which strips the crates.io prefix."
 
 (defun crate--bookmark-make-record-function ()
   "Create a bookmark record for the current crate buffer.
-Intended for use as `bookmark-make-record-function'."
-  `(,(concat "Rust Crate: " crate-name)
-    (handler . crate-bookmark-jump)
-    (crate . ,crate-name)
-    ;; This location tag is used as a description in the bookmark menu list
-    (location . ,(crate--description))))
+Intended for use as `bookmark-make-record-function'.  A local
+crate records its directory, so the handler reopens that checkout
+and not the published crate of the same name."
+  (let ((label (if crate-local-path
+                   (format "Rust Crate: %s (%s)" crate-name crate-local-path)
+                 (concat "Rust Crate: " crate-name))))
+    `(,label
+      (handler . crate-bookmark-jump)
+      (crate . ,crate-name)
+      (directory . ,crate-local-path)
+      ;; This location tag is used as a description in the bookmark menu list
+      (location . ,(crate--description)))))
 
 
 ;;;###autoload
 (defun crate-bookmark-jump (bm)
   "Restore a crate bookmark BM.
-Called by the bookmark system.  Extracts the crate name from BM
-and delegates to `find-crate'."
+Called by the bookmark system.  A record with a directory goes to
+`crate-visit-directory' and every other record to `find-crate'."
   (interactive (list (read-from-minibuffer "Bookmark: ")))
-  (let ((name (bookmark-prop-get bm 'crate)))
-    (find-crate name)))
+  (let ((dir (bookmark-prop-get bm 'directory)))
+    (if dir
+        (crate-visit-directory dir)
+      (find-crate (bookmark-prop-get bm 'crate)))))
 (put 'crate-bookmark-jump 'bookmark-handler-type "Crate")
 
 ;;; Org Integration
@@ -2092,7 +2336,9 @@ Embark passes its candidate directly."
          (data (or (and crate-name (string= name crate-name) crate-data)
                    (crate--crate name)))
          (version (and data (gethash "latest_version" data)))
-         (line (crate--dependency-line name version)))
+         (line (crate--dependency-line
+                (or (and data (gethash "name" data)) name)
+                version)))
     (kill-new line)
     (message "Copied: %s" line)))
 

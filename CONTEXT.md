@@ -14,6 +14,22 @@ Name, description, homepage, repository, version, and other fields from
 the crates.io SQLite database. Always available once the database is
 loaded — no build required.
 
+**Local crate**:
+A Rust crate that lives in a directory with a `Cargo.toml` and has no
+row in the crates.io database. Its metadata comes from
+`cargo metadata --no-deps`, and `crate-visit-directory` opens it.
+_Avoid_: Path dependency, workspace crate, unpublished crate
+
+**Crate record**:
+The hash table in `crate-data` that one detail buffer reads. A database
+row builds one, and `cargo metadata` builds one for a local crate, so
+every section inserter serves both sources.
+
+**Dependency row**:
+One line of the Dependencies section. A database row holds
+`(NAME REQ KIND OPTIONAL)`, and a local row adds a `(KIND . TARGET)`
+source spec that names a path or a git dependency.
+
 **Module tree**:
 The hierarchy of public items within a crate — modules, structs, traits,
 functions, macros, etc. Extracted from rustdoc JSON.

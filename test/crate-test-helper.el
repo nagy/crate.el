@@ -130,5 +130,68 @@ record, not the top-level crate table)."
          (crate-data ,data))
      ,@body))
 
+(defun crate-test--cargo-dependency (name &rest props)
+  "Return one `cargo metadata' dependency for crate NAME.
+PROPS are keyword-value pairs: :req (default \"*\"), :kind (default
+JSON null, which means a normal dependency), :optional (default
+false), :path and :source (both default JSON null)."
+  (let ((dep (make-hash-table :test #'equal)))
+    (puthash "name" name dep)
+    (puthash "req" (or (plist-get props :req) "*") dep)
+    (puthash "kind" (or (plist-get props :kind) :null) dep)
+    (puthash "optional" (if (plist-get props :optional) t :false) dep)
+    (puthash "path" (or (plist-get props :path) :null) dep)
+    (puthash "source" (or (plist-get props :source) :null) dep)
+    dep))
+
+(defun crate-test--cargo-package (manifest &rest props)
+  "Return one `cargo metadata' package whose manifest is MANIFEST.
+PROPS are keyword-value pairs.  :name defaults to \"my-crate\" and
+:version to \"0.3.0\".  :description, :license, :repository,
+:homepage and :documentation all default to JSON null, and
+:dependencies takes a list of `crate-test--cargo-dependency'
+values."
+  (let ((package (make-hash-table :test #'equal)))
+    (puthash "name" (or (plist-get props :name) "my-crate") package)
+    (puthash "version" (or (plist-get props :version) "0.3.0") package)
+    (puthash "manifest_path" manifest package)
+    (dolist (key '("description" "license" "repository"
+                   "homepage" "documentation"))
+      (puthash key (or (plist-get props (intern (concat ":" key))) :null)
+               package))
+    (puthash "dependencies" (vconcat (plist-get props :dependencies)) package)
+    package))
+
+(defun crate-test--cargo-metadata (manifest &rest props)
+  "Return parsed `cargo metadata' JSON for the package at MANIFEST.
+PROPS are the pairs of `crate-test--cargo-package'.  The JSON makes
+a round trip through `json-serialize', so the result has the shape
+that `json-parse-buffer' answers, keywords for null included.  A
+non-nil :workspace-mate joins a second package of the same
+workspace, so a test can check how the member is picked."
+  (let ((json (make-hash-table :test #'equal))
+        (packages (list (apply #'crate-test--cargo-package manifest props))))
+    (when (plist-get props :workspace-mate)
+      (setq packages (append packages
+                             (list (crate-test--cargo-package
+                                    (plist-get props :workspace-mate)
+                                    :name "workspace-mate")))))
+    (puthash "packages" (vconcat packages) json)
+    (json-parse-string (json-serialize json))))
+
+(defmacro crate-test--with-local-crate (dir &rest body)
+  "Create a crate directory, bind DIR to it and evaluate BODY.
+DIR is a fresh temporary directory that holds a `Cargo.toml', and
+`crate-local--metadata' answers a fixed record while BODY runs.
+The directory is deleted afterwards."
+  (declare (indent 1))
+  `(let ((,dir (make-temp-file "crate-local-" t)))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "Cargo.toml" ,dir)
+             (insert "[package]\nname = \"my-crate\"\n"))
+           ,@body)
+       (delete-directory ,dir t))))
+
 (provide 'crate-test-helper)
 ;;; crate-test-helper.el ends here

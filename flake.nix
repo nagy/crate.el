@@ -92,22 +92,21 @@
             inherit crateEl lint;
           };
 
-          # Dev shell: Emacs plus the tools the on-demand rustdoc path
-          # and the test suite shell out to.
+          # Dev shell: Emacs plus the tools the on-demand rustdoc path,
+          # the local-crate command and the test suite shell out to.
           devShells.default = pkgs.mkShell {
             # An Emacs wrapper carries the load paths, so a plain
             # `emacs -L .' in the shell sees magit-section and evil.
             # Evil is optional and optional to test: the package never
             # declares it, but its suite needs it.
             packages = [
-              (pkgs.emacsPackages.emacsWithPackages (
-                epkgs: [
-                  epkgs.magit-section
-                  epkgs.evil
-                ]
-              ))
+              (pkgs.emacsPackages.emacsWithPackages (epkgs: [
+                epkgs.magit-section
+                epkgs.evil
+              ]))
               pkgs.nix
               pkgs.sqlite
+              pkgs.cargo
             ];
           };
 

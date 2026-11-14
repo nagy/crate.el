@@ -11,6 +11,8 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 * Features
 
 - =M-x find-crate= with completion, Marginalia annotations, and Embark actions
+- =M-x crate-visit-directory= shows a local crate from its
+  =Cargo.toml=, with no database and no crates.io row
 - The homepage, repository and documentation URL of a detail buffer are
   clickable links, unless =crate-goto-address= is nil
 - The detail buffer is a tree of =magit-section= sections, so it folds,
@@ -94,6 +96,28 @@ entries to reorder them:
 A dependency name and the URL fields are links, so =RET= on a
 dependency opens it and =RET= on a URL opens the browser.  =w= copies a
 =Cargo.toml= dependency line.
+
+* Local crates
+
+=M-x crate-visit-directory= opens the crate of a local directory.  The
+command prompts for a directory with ordinary file-name completion,
+keeps only directories as candidates, and reads the crate fields and
+the dependency list with =cargo metadata --no-deps --offline=.  So the
+directory must hold a =Cargo.toml= and =crate-cargo-program= must name
+a working cargo.  The default is =cargo=, which searches =PATH=, and
+the Nix build writes the store path of its own cargo there, so an
+installed package needs no cargo on =PATH=.  Set it to nil to turn the
+command off.  The buffer is named =Crate: <name> (<path>)=, so a local
+checkout and the published crate of the same name keep separate
+buffers.
+
+Dependency rows read like the =Cargo.toml= lines that name them.  A
+registry dependency shows =serde = "1.0"= and links to crates.io, a
+path dependency shows =my-util = { path = "../my-util" }=, and a git
+dependency shows its URL.  The Dependents section comes from the
+database and stays empty for a crate that crates.io does not hold.  A
+local crate shows no Modules section yet, because no rustdoc build
+feeds it.  =g= reads the =Cargo.toml= again.
 
 * Browse table
 
