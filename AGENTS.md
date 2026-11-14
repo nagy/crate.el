@@ -568,7 +568,18 @@ The fold commands (`zc`, `zo`, `za`) reach the sections through
 `evil--mode-p` compares the major mode name itself, so `evil-crate.el`
 adds a `crate-mode` entry whose actions wrap `magit-section-toggle` and
 its siblings in lambdas, because those commands take the section as an
-argument.
+argument.  A second entry serves `crate-tree-mode`: its actions call
+`crate-tree-toggle`, `crate-tree-fold` and `crate-tree-unfold`, and its
+`:open-all` and `:close-all` set the depth instead of walking sections.
+
+A tree buffer gives evil commands away on purpose: the state map binds
+`TAB`, `s`, `S`, `y`, `w`, `fp`, `fk`, `ff`, `fr`, `gr`, the digits
+and `C-c C-o`, so `evil-substitute`, `evil-find-char`, `evil-yank` and
+the count prefix stay out of the way.  The filter commands take a plain
+two-key binding (`fp`) in the state map, because a keymap value that a
+state map holds must exist when `evil-crate.el` loads, and
+`crate-tree.el` may load later.  `crate-tree-set-depth` takes an
+argument, so `crate-evil--depth-command` builds one command per digit.
 
 ### Null guard in `when-let*` conditions
 

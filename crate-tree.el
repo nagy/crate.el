@@ -999,19 +999,42 @@ Docs column takes the rest."
   (when-let* ((id (tabulated-list-get-id)))
     (gethash id crate-tree--items)))
 
+(defun crate-tree--row-item ()
+  "Return the item of the row at point, or signal a `user-error'."
+  (or (crate-tree--item-at-point)
+      (user-error "No item at point")))
+
+(defun crate-tree--set-folded (item folded)
+  "Store ITEM as folded or unfolded according to FOLDED, then reprint."
+  (let ((path (crate-tree-item-path item)))
+    (if folded
+        (puthash path t crate-tree--folded)
+      (remhash path crate-tree--folded))
+    (crate-tree--reprint)))
+
+(defun crate-tree-fold ()
+  "Fold the row at point."
+  (interactive)
+  (let ((item (crate-tree--row-item)))
+    (unless (crate-tree-item-children item)
+      (user-error "%s has no children" (crate-tree-item-name item)))
+    (crate-tree--set-folded item t)))
+
+(defun crate-tree-unfold ()
+  "Unfold the row at point."
+  (interactive)
+  (let ((item (crate-tree--row-item)))
+    (unless (crate-tree-item-children item)
+      (user-error "%s has no children" (crate-tree-item-name item)))
+    (crate-tree--set-folded item nil)))
+
 (defun crate-tree-toggle ()
   "Fold or unfold the row at point."
   (interactive)
-  (let ((item (crate-tree--item-at-point)))
-    (unless item
-      (user-error "No item at point"))
+  (let ((item (crate-tree--row-item)))
     (unless (crate-tree-item-children item)
       (user-error "%s has no children" (crate-tree-item-name item)))
-    (let ((path (crate-tree-item-path item)))
-      (if (gethash path crate-tree--folded)
-          (remhash path crate-tree--folded)
-        (puthash path t crate-tree--folded)))
-    (crate-tree--reprint)))
+    (crate-tree--set-folded item (not (crate-tree--folded-p item)))))
 
 (defun crate-tree-mouse-toggle (event)
   "Fold or unfold the row that EVENT names."

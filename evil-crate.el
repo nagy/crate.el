@@ -70,6 +70,20 @@
 (declare-function crate-browse-search-url "crate" ())
 (declare-function crate-browse-visit "crate" ())
 (declare-function crate-copy-dependency "crate" (&optional name))
+(declare-function crate-tree-browse-url "crate-tree" ())
+(declare-function crate-tree-copy-dependency "crate-tree" ())
+(declare-function crate-tree-copy-path "crate-tree" ())
+(declare-function crate-tree-focus "crate-tree" (regexp))
+(declare-function crate-tree-fold "crate-tree" ())
+(declare-function crate-tree-kind-filter "crate-tree" (kinds))
+(declare-function crate-tree-reset-filters "crate-tree" ())
+(declare-function crate-tree-reverse-sort "crate-tree" ())
+(declare-function crate-tree-set-depth "crate-tree" (depth))
+(declare-function crate-tree-sort "crate-tree" ())
+(declare-function crate-tree-toggle "crate-tree" ())
+(declare-function crate-tree-toggle-public "crate-tree" ())
+(declare-function crate-tree-unfold "crate-tree" ())
+(declare-function crate-tree-visit "crate-tree" ())
 (defvar crate--crates-io-url)
 (defvar crate-name)
 (defvar magit-root-section)
@@ -115,6 +129,38 @@ until a user calls `crate-evil-mode'."
 (defvar crate-evil-browse-visual-keys
   '(([remap evil-yank] . crate-evil-browse-copy-dependencies))
   "Keys that `crate-evil-mode' binds in visual state of browse buffers.")
+
+(defvar crate-evil-tree-keys
+  '(([remap evil-ret] . crate-tree-visit)
+    ;; TAB is C-i, the jump of the evil jump list, in the normal
+    ;; state.  A tree row folds instead.
+    ("TAB" . crate-tree-toggle)
+    ("s" . crate-tree-sort)
+    ("S" . crate-tree-reverse-sort)
+    ;; The major mode spells these as the `f' prefix map.  A plain
+    ;; two-key binding keeps the state map free of a keymap value.
+    ("fp" . crate-tree-toggle-public)
+    ("fk" . crate-tree-kind-filter)
+    ("ff" . crate-tree-focus)
+    ("fr" . crate-tree-reset-filters)
+    ("y" . crate-tree-copy-path)
+    ("w" . crate-tree-copy-dependency)
+    ("gr" . revert-buffer)
+    ("C-c C-o" . crate-tree-browse-url))
+  "Keys that `crate-evil-mode' binds in tree buffers.
+`crate-tree-set-depth' takes an argument, so the digit keys go in
+below as commands of their own.")
+
+(defun crate-evil--depth-command (depth)
+  "Return the command that sets the tree depth to DEPTH."
+  (lambda ()
+    (interactive)
+    (crate-tree-set-depth depth)))
+
+(dotimes (number 10)
+  (push (cons (number-to-string number)
+              (crate-evil--depth-command number))
+        crate-evil-tree-keys))
 
 (defun crate-evil-open-web ()
   "Open the crates.io page of the crate of the current buffer."
@@ -166,6 +212,15 @@ One line per row, in display order."
                :close      (lambda ()
                              (magit-section-hide (magit-current-section)))))
 
+(add-to-list 'evil-fold-list
+             `((crate-tree-mode)
+               :open-all   (lambda () (crate-tree-set-depth 9))
+               :close-all  (lambda () (crate-tree-set-depth 1))
+               :toggle     (lambda () (crate-tree-toggle))
+               :open       (lambda () (crate-tree-unfold))
+               :open-rec   (lambda () (crate-tree-unfold))
+               :close      (lambda () (crate-tree-fold))))
+
 ;;; Local minor modes
 
 (define-minor-mode crate-evil-detail-mode
@@ -176,6 +231,12 @@ Enable `crate-evil-mode' instead."
 
 (define-minor-mode crate-evil-browse-mode
   "Install the evil bindings of crate browse buffers.
+Enable `crate-evil-mode' instead."
+  :group 'crate
+  :lighter nil)
+
+(define-minor-mode crate-evil-tree-mode
+  "Install the evil bindings of crate tree buffers.
 Enable `crate-evil-mode' instead."
   :group 'crate
   :lighter nil)
@@ -197,6 +258,7 @@ A `[remap COMMAND]' vector passes through unchanged."
 (crate-evil--bind 'normal 'crate-evil-browse-mode crate-evil-browse-keys)
 (crate-evil--bind 'visual 'crate-evil-browse-mode
                   crate-evil-browse-visual-keys)
+(crate-evil--bind 'normal 'crate-evil-tree-mode crate-evil-tree-keys)
 
 ;;; Global mode
 
@@ -206,12 +268,15 @@ A `[remap COMMAND]' vector passes through unchanged."
    ((derived-mode-p 'crate-mode)
     (crate-evil-detail-mode 1))
    ((derived-mode-p 'crate-browse-mode)
-    (crate-evil-browse-mode 1))))
+    (crate-evil-browse-mode 1))
+   ((derived-mode-p 'crate-tree-mode)
+    (crate-evil-tree-mode 1))))
 
 (defun crate-evil--disable ()
   "Disable every local evil mode in the current buffer."
   (crate-evil-detail-mode -1)
-  (crate-evil-browse-mode -1))
+  (crate-evil-browse-mode -1)
+  (crate-evil-tree-mode -1))
 
 ;;;###autoload
 (defun crate-evil-auto-setup ()

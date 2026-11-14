@@ -30,6 +30,7 @@
 (require 'ert)
 (require 'evil)
 (require 'crate)
+(require 'crate-tree)
 (require 'evil-crate)
 
 (defun crate-evil-test--binding (mode key &optional visual)
@@ -232,6 +233,106 @@ VISUAL selects a visual line state instead of the normal state."
           (with-current-buffer buffer
             (should-not crate-evil-detail-mode)))
       (kill-buffer buffer))))
+
+;;; The crate tree
+
+(defun crate-evil-test--tree-root ()
+  "Return a tiny crate tree for the tree tests."
+  (let* ((connect (crate-tree-item--create
+                   :path "harness::api::net::connect"
+                   :name "connect" :kind 'function
+                   :kind-word "fn" :vis-word "pub"))
+         (net (crate-tree-item--create
+               :path "harness::api::net" :name "net" :kind 'module
+               :kind-word "mod" :vis-word "pub"
+               :children (list connect)))
+         (api (crate-tree-item--create
+               :path "harness::api" :name "api" :kind 'module
+               :kind-word "mod" :vis-word "pub"
+               :children (list net))))
+    (crate-tree-item--create
+     :path "harness" :name "harness" :kind 'module
+     :kind-word "crate" :vis-word "pub"
+     :children (list api))))
+
+(defmacro crate-evil-test--with-tree (&rest body)
+  "Run BODY in a tree buffer with evil in the normal state."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (crate-tree-mode)
+     (setq-local crate-tree--root (crate-evil-test--tree-root))
+     (setq-local crate-tree--name "harness")
+     (crate-tree--reprint)
+     (crate-evil--maybe-enable)
+     (evil-local-mode 1)
+     (evil-normal-state)
+     ,@body))
+
+(defun crate-evil-test--goto (path)
+  "Move point to the tree row of PATH."
+  (let ((line 1)
+        (found nil))
+    (dolist (entry tabulated-list-entries)
+      (when (and (not found) (equal (car entry) path))
+        (setq found t))
+      (unless found
+        (setq line (1+ line))))
+    (unless found
+      (error "No row for %s" path))
+    (goto-char (point-min))
+    (forward-line (1- line))))
+
+(ert-deftest crate-evil-local-mode-tree ()
+  "A tree buffer adopts the tree bindings alone."
+  (crate-evil-test--with-tree
+    (should crate-evil-tree-mode)
+    (should-not crate-evil-detail-mode)
+    (should-not crate-evil-browse-mode)))
+
+(ert-deftest crate-evil-tree-keys ()
+  "The state map reaches the tree commands that evil shadows."
+  (crate-evil-test--with-tree
+    (should (eq (key-binding (kbd "TAB")) #'crate-tree-toggle))
+    (should (eq (key-binding (kbd "s")) #'crate-tree-sort))
+    (should (eq (key-binding (kbd "S")) #'crate-tree-reverse-sort))
+    (should (eq (key-binding (kbd "y")) #'crate-tree-copy-path))
+    (should (eq (key-binding (kbd "w")) #'crate-tree-copy-dependency))
+    (should (eq (key-binding (kbd "RET")) #'crate-tree-visit))
+    (should (eq (key-binding (kbd "gr")) #'revert-buffer))
+    (should (eq (key-binding (kbd "C-c C-o")) #'crate-tree-browse-url))
+    (should (eq (key-binding (kbd "fp")) #'crate-tree-toggle-public))
+    (should (eq (key-binding (kbd "fk")) #'crate-tree-kind-filter))
+    (should (eq (key-binding (kbd "ff")) #'crate-tree-focus))
+    (should (eq (key-binding (kbd "fr")) #'crate-tree-reset-filters))))
+
+(ert-deftest crate-evil-tree-depth-keys ()
+  "A digit key sets the depth of the table."
+  (crate-evil-test--with-tree
+    (call-interactively (key-binding (kbd "2")))
+    (should (equal crate-tree--max-depth 1))
+    (call-interactively (key-binding (kbd "9")))
+    (should-not crate-tree--max-depth)))
+
+(ert-deftest crate-evil-tree-fold-keys ()
+  "The evil fold commands close and open a tree row."
+  (crate-evil-test--with-tree
+    (crate-evil-test--goto "harness::api")
+    (evil-close-fold)
+    (should (gethash "harness::api" crate-tree--folded))
+    (should-not (member "harness::api::net"
+                        (mapcar #'car tabulated-list-entries)))
+    (crate-evil-test--goto "harness::api")
+    (evil-open-fold)
+    (should-not (gethash "harness::api" crate-tree--folded))
+    (should (member "harness::api::net"
+                    (mapcar #'car tabulated-list-entries)))))
+
+(ert-deftest crate-evil-tree-disable ()
+  "The helper disables the tree bindings again."
+  (crate-evil-test--with-tree
+    (crate-evil--disable)
+    (should-not crate-evil-tree-mode)))
+
 
 (provide 'evil-crate-test)
 
