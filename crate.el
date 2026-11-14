@@ -106,6 +106,15 @@ Set it to nil to turn the local-crate command off."
   :group 'crate)
 
 
+(defcustom crate-rustc-program "rustc"
+  "Rustc executable that the crate tree mode runs.
+Cargo runs the compiler that this name reaches, and the Nix build
+substitutes the store path of the packaged rustc.  Set it to nil to
+let cargo pick the compiler that sits beside it."
+  :type '(choice (const :tag "Cargo default" nil)
+                 (file :tag "Rustc executable"))
+  :group 'crate)
+
 (defconst crate--crates-io-url "https://crates.io/crates/")
 
 (defcustom crate-annotation-width 70
@@ -468,6 +477,11 @@ Memoized — cleared by `crate-refresh-cache'.")
 (defvar crate-doc--in-flight (make-hash-table :test #'equal)
   "In-flight async doc builds keyed by crate name.")
 
+(defvar crate-doc--render-function nil
+  "Function that re-renders the buffer of a finished rustdoc build.
+A buffer that starts a build sets this buffer-locally.  nil means
+`crate--render', the detail buffer.")
+
 (defvar crate-doc--generation 0
   "Generation counter for async doc builds.
 Bumped by `crate-refresh-cache'; results from older generations
@@ -533,7 +547,8 @@ and no error."
                                     crate-doc--cache)
                            (when (buffer-live-p buffer)
                              (with-current-buffer buffer
-                               (crate--render)))
+                               (funcall (or crate-doc--render-function
+                                            #'crate--render))))
                            (unless json
                              (message "crate: rustdoc build failed for %s"
                                       name))))

@@ -586,6 +586,169 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
+;;; Local rustdoc builds
+
+;; `cargo doc' type-checks the crate, so the build costs about the same
+;; as `cargo check'.  It needs the dependencies of the crate, so the
+;; command runs online and outside Nix: a local development crate
+;; usually has its dependencies in the cargo cache already.
+
+(defvar crate-tree--json-cache (make-hash-table :test #'equal)
+  "Parsed rustdoc JSON keyed by (tree MANIFEST).
+A :failed sentinel caches a build that cannot run, so a reprint never
+retries it.  `crate-tree--refresh' drops the entry before a rebuild.")
+
+(defvar crate-tree--in-flight (make-hash-table :test #'equal)
+  "Running rustdoc builds keyed by crate manifest.")
+
+(defun crate-tree--json-cache-key (directory)
+  "Return the cache key of the crate in DIRECTORY."
+  (list 'tree (crate-local--manifest directory)))
+
+(defun crate-tree--lib-target (package)
+  "Return the library target of the `cargo metadata' PACKAGE.
+A package without a library target answers nil, and the tree mode
+builds nothing for it."
+  (when-let* ((targets (gethash "targets" package)))
+    (seq-find (lambda (target)
+                (seq-some (lambda (kind)
+                            (member kind '("lib" "rlib" "dylib"
+                                           "proc-macro")))
+                          (crate-tree--ids (gethash "kind" target))))
+              (append targets nil))))
+
+(defun crate-tree--json-file (metadata manifest)
+  "Return the rustdoc JSON path that METADATA names for MANIFEST."
+  (when-let* ((package (crate-local--package metadata manifest))
+              (target (crate-tree--lib-target package))
+              (directory (gethash "target_directory" metadata))
+              (name (gethash "name" target)))
+    (expand-file-name (concat name ".json")
+                      (expand-file-name "doc" directory))))
+
+(defun crate-tree--read-json (file)
+  "Return the parsed rustdoc JSON of FILE, or nil."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (condition-case nil
+          (json-parse-buffer)
+        (error nil)))))
+
+(defun crate-tree--build-environment ()
+  "Return the environment list of a rustdoc build.
+Stable rustc writes JSON behind `-Z unstable-options', and
+RUSTC_BOOTSTRAP lifts that gate."
+  (append (list "RUSTC_BOOTSTRAP=1"
+                "RUSTDOCFLAGS=-Zunstable-options --output-format json")
+          (when-let* ((program crate-rustc-program)
+                      (rustc (executable-find program)))
+            (list (concat "RUSTC=" rustc)))))
+
+(defun crate-tree--start-local-build (directory buffer)
+  "Document the crate in DIRECTORY, then reprint BUFFER.
+Return non-nil when a build runs, nil when no cargo, no manifest or
+no library target answers.  The failed start caches `:failed'."
+  (let* ((manifest (crate-local--manifest directory))
+         (key (crate-tree--json-cache-key directory))
+         (program (and crate-cargo-program
+                       (executable-find crate-cargo-program)))
+         (metadata (and program (crate-local--metadata directory)))
+         (json-file (and metadata (crate-tree--json-file metadata manifest))))
+    (cond
+     ((gethash manifest crate-tree--in-flight)
+      t)
+     ((or (null program) (null json-file))
+      (puthash key :failed crate-tree--json-cache)
+      nil)
+     (t
+      (let ((out (generate-new-buffer " *crate-tree-build*"))
+            (doc (file-name-nondirectory
+                  (directory-file-name (file-name-directory manifest))))
+            (environment (crate-tree--build-environment)))
+        (condition-case nil
+            (progn
+              (let ((process-environment (append environment
+                                                 process-environment))
+                    ;; `make-process' runs the child in the
+                    ;; `default-directory' of the current buffer.
+                    (default-directory
+                     (file-name-as-directory (expand-file-name directory))))
+                (make-process
+                 :name (format "crate-tree-build-%s" doc)
+                 :buffer out
+                 :command (list program "doc" "--lib" "--no-deps"
+                                "--document-private-items")
+                 :noquery t
+                 :sentinel
+                 (lambda (process _event)
+                   (when (memq (process-status process) '(exit signal))
+                     (unwind-protect
+                         (let ((json (when (eq 0 (process-exit-status process))
+                                       (crate-tree--read-json json-file))))
+                           (remhash manifest crate-tree--in-flight)
+                           (puthash key (or json :failed) crate-tree--json-cache)
+                           (when (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (when (derived-mode-p 'crate-tree-mode)
+                                 (crate-tree--apply-json
+                                  (if json
+                                      json
+                                    (gethash key crate-tree--json-cache)))
+                                 (unless json
+                                   (message "crate-tree: rustdoc build failed for %s"
+                                            doc))))))
+                       (when (buffer-live-p out)
+                         (kill-buffer out)))))))
+              (puthash manifest t crate-tree--in-flight)
+              t)
+          (error
+           (when (buffer-live-p out)
+             (kill-buffer out))
+           (puthash key :failed crate-tree--json-cache)
+           nil)))))))
+
+(defun crate-tree--json (directory)
+  "Return the rustdoc JSON of the crate in DIRECTORY, or nil.
+A cache miss starts an asynchronous `cargo doc' for the buffer that
+asks, and that buffer reprints when the build ends."
+  (when-let* ((manifest (crate-local--manifest directory))
+              ((file-exists-p manifest)))
+    (let* ((key (crate-tree--json-cache-key directory))
+           (cached (gethash key crate-tree--json-cache)))
+      (cond
+       ((eq cached :failed) nil)
+       (cached cached)
+       (t
+        (crate-tree--start-local-build directory (current-buffer))
+        nil)))))
+
+(defun crate-tree--forget-local (directory)
+  "Drop the cached JSON of the crate in DIRECTORY."
+  (remhash (crate-tree--json-cache-key directory) crate-tree--json-cache))
+
+(defun crate-tree--apply-json (json)
+  "Store JSON as the tree of the buffer and print it.
+A `:failed' sentinel or nil leaves the old tree in place."
+  (unless (or (null json) (eq json :failed))
+    (setq crate-tree--root (crate-tree--items json)))
+  (crate-tree--reprint))
+
+(defun crate-tree--refresh (&rest _ignored)
+  "Load the rustdoc JSON of the buffer source, then print it.
+A local crate runs `cargo doc' again, and a database crate asks
+`crate-doc--json', which starts the Nix build on a miss."
+  (interactive)
+  (if crate-tree--directory
+      (progn
+        (crate-tree--forget-local crate-tree--directory)
+        (crate-tree--apply-json
+         (crate-tree--json crate-tree--directory)))
+    (crate-tree--apply-json (crate-doc--json crate-tree--name)))
+  (when (null crate-tree--root)
+    (message "crate-tree: no rustdoc JSON yet")))
+
 ;;; Cells
 
 (defun crate-tree--state ()
@@ -761,8 +924,8 @@ Docs column takes the rest."
         (insert (propertize "No rustdoc JSON yet." 'face 'shadow) "\n")))))
 
 (defun crate-tree--revert (&rest _ignored)
-  "Reprint the table."
-  (crate-tree--reprint))
+  "Rebuild the rustdoc JSON of the buffer source, then reprint."
+  (crate-tree--refresh))
 
 ;;; Row commands
 

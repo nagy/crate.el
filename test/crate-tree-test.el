@@ -26,6 +26,7 @@
 (require 'crate-tree)
 (require 'ert)
 (require 'cl-lib)
+(require 'crate-test-helper)
 
 ;;; Fixtures
 
@@ -557,6 +558,113 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
     (should (string-match-p "No rustdoc JSON yet"
                             (buffer-substring-no-properties
                              (point-min) (point-max))))))
+
+
+;;; Local rustdoc builds
+
+(defun crate-tree-test--metadata (manifest target-directory &optional target-name)
+  "Return a `cargo metadata' record for MANIFEST with one library target.
+TARGET-DIRECTORY holds the build output, and TARGET-NAME names the
+library."
+  (let ((package (make-hash-table :test #'equal))
+        (target (make-hash-table :test #'equal))
+        (json (make-hash-table :test #'equal)))
+    (puthash "name" "my_crate" package)
+    (puthash "manifest_path" (expand-file-name manifest) package)
+    (puthash "name" (or target-name "my_crate") target)
+    (puthash "kind" ["lib"] target)
+    (puthash "targets" (vector target) package)
+    (puthash "target_directory" target-directory json)
+    (puthash "packages" (vector package) json)
+    json))
+
+(ert-deftest crate-tree-json-file ()
+  "The JSON path follows the target directory and the library name."
+  (let* ((manifest (expand-file-name "Cargo.toml" "/tmp/mycrate"))
+         (metadata (crate-tree-test--metadata manifest "/tmp/target")))
+    (should (equal (crate-tree--json-file metadata manifest)
+                   "/tmp/target/doc/my_crate.json"))))
+
+(ert-deftest crate-tree-json-file-no-library ()
+  "A package without a library target names no JSON."
+  (let* ((manifest (expand-file-name "Cargo.toml" "/tmp/mycrate"))
+         (metadata (crate-tree-test--metadata manifest "/tmp/target"))
+         (package (aref (gethash "packages" metadata) 0))
+         (target (aref (gethash "targets" package) 0)))
+    (puthash "kind" ["bin"] target)
+    (should-not (crate-tree--json-file metadata manifest))))
+
+(ert-deftest crate-tree-json-cached ()
+  "A cached document answers without a build."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree--json-cache (make-hash-table :test #'equal))
+          (json (make-hash-table :test #'equal)))
+      (puthash (crate-tree--json-cache-key dir) json crate-tree--json-cache)
+      (should (eq (crate-tree--json dir) json)))))
+
+(ert-deftest crate-tree-json-failed-sentinel ()
+  "A failed build stays failed instead of retrying."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree--json-cache (make-hash-table :test #'equal)))
+      (puthash (crate-tree--json-cache-key dir) :failed crate-tree--json-cache)
+      (should-not (crate-tree--json dir))
+      (should (eq (gethash (crate-tree--json-cache-key dir)
+                           crate-tree--json-cache)
+                  :failed)))))
+
+(ert-deftest crate-tree-json-without-manifest ()
+  "A directory without a manifest answers nil."
+  (let ((directory (make-temp-file "crate-tree-empty" t)))
+    (unwind-protect
+        (let ((crate-tree--json-cache (make-hash-table :test #'equal)))
+          (should-not (crate-tree--json directory)))
+      (delete-directory directory t))))
+
+(ert-deftest crate-tree-start-build-without-cargo ()
+  "A missing cargo caches the failure."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree--json-cache (make-hash-table :test #'equal))
+          (crate-cargo-program nil))
+      (should-not (crate-tree--start-local-build dir (current-buffer)))
+      (should (eq (gethash (crate-tree--json-cache-key dir)
+                           crate-tree--json-cache)
+                  :failed)))))
+
+(ert-deftest crate-tree-read-json ()
+  "The reader parses a rustdoc document and survives a broken file."
+  (let ((file (make-temp-file "crate-tree-json" nil ".json")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"format_version\": 61, \"root\": 0}"))
+          (should (equal (gethash "format_version"
+                                  (crate-tree--read-json file))
+                         61))
+          (with-temp-file file
+            (insert "not json"))
+          (should-not (crate-tree--read-json file)))
+      (delete-file file))))
+
+(ert-deftest crate-tree-mode-refresh-local ()
+  "A refresh prints the document that the builder answers."
+  (crate-tree-test--with-buffer
+    (setq-local crate-tree--root nil)
+    (setq-local crate-tree--directory "/tmp/somewhere")
+    (cl-letf (((symbol-function 'crate-tree--json)
+               (lambda (_directory) (crate-tree-test--json)))
+              ((symbol-function 'crate-tree--forget-local) #'ignore))
+      (crate-tree--refresh))
+    (should (equal (car (crate-tree-test--row-ids)) "harness"))))
+
+(ert-deftest crate-tree-mode-refresh-keeps-tree ()
+  "A refresh that answers no document keeps the rows of the last one."
+  (crate-tree-test--with-buffer
+    (let ((before (crate-tree-test--row-ids)))
+      (setq-local crate-tree--directory "/tmp/somewhere")
+      (cl-letf (((symbol-function 'crate-tree--json) (lambda (_directory) nil))
+                ((symbol-function 'crate-tree--forget-local) #'ignore))
+        (crate-tree--refresh))
+      (should (equal (crate-tree-test--row-ids) before)))))
 
 ;;; The `cargo-modules structure' format
 

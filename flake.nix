@@ -98,6 +98,7 @@
               pkgs.nix
               pkgs.sqlite
               pkgs.cargo
+              pkgs.rustc
             ];
           };
 

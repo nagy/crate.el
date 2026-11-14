@@ -159,6 +159,29 @@ format.  `test/fixtures/harness.structure.txt` holds the output of
 that tool for the fixture crate, so one ERT test compares the two
 line by line.
 
+### Local rustdoc builds
+
+`crate-tree--start-local-build` runs `cargo doc --lib --no-deps
+--document-private-items` in the crate directory through
+`crate-cargo-program`, with `RUSTC_BOOTSTRAP=1` and a `RUSTDOCFLAGS`
+that asks for JSON.  `make-process` takes no environment keyword, so
+the child inherits a `process-environment` binding.  `RUSTC` names
+`crate-rustc-program` when that program resolves, and cargo finds its
+own compiler otherwise.
+
+The command runs online and outside Nix, because `cargo doc`
+type-checks the crate and needs its dependencies, which a development
+crate usually holds in the cargo cache already.  The JSON path comes
+from `cargo metadata`: the `target_directory`, the `doc` directory and
+the library target name.  A package with no library target builds
+nothing.
+
+`crate-tree--json` caches the parsed document under
+`(tree MANIFEST)` with a `:failed` sentinel, and `crate-tree--refresh`
+drops the entry before a rebuild, so `g` reads the source as it stands.
+The Nix build substitutes both the cargo and the rustc store paths
+into the defcustom defaults.
+
 ### Crate tree mode
 
 `crate-tree-mode` derives from `tabulated-list-mode`, so one buffer
@@ -620,6 +643,7 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 |-----------|-----------|-----|
 | Emacs 30.1 | yes | `json-parse-buffer`, `with-memoization`, `string-replace`, `cl-labels` |
 | cargo | soft | `crate-visit-directory` reads a local crate through `cargo metadata --no-deps`; option `crate-cargo-program` |
+| rustc | soft | the tree mode runs `cargo doc` on a local crate; option `crate-rustc-program` |
 | ol (org) | soft | Org link support via `ol-crate.el` |
 | bookmark | yes | built-in crate bookmarks |
 | browse-url | soft | crates.io URL handler |

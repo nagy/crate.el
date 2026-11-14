@@ -8,8 +8,10 @@
   magitSection ? emacsPackages.magit-section,
   # Optional; the build compiles against it and the suite loads it.
   evil ? emacsPackages.evil,
-  # The build writes its store path into `crate-cargo-program'.
+  # The build writes their store paths into `crate-cargo-program' and
+  # `crate-rustc-program'.
   cargo ? pkgs.cargo,
+  rustc ? pkgs.rustc,
   testCratesDb,
   # Rustdoc JSON of the fixture crate, built by nix/harness-doc.nix.
   harnessDoc,
@@ -31,7 +33,10 @@ melpaBuild {
 
   turnCompilationWarningToError = true;
 
-  nativeBuildInputs = [ cargo ];
+  nativeBuildInputs = [
+    cargo
+    rustc
+  ];
 
   # `packageRequires' decorates the package set, but puts nothing on the
   # load path of this build, so build and check run through a wrapper
@@ -53,6 +58,9 @@ melpaBuild {
     substituteInPlace crate.el \
       --replace-fail '(defcustom crate-cargo-program "cargo"' \
                      '(defcustom crate-cargo-program "${lib.getExe cargo}"'
+    substituteInPlace crate.el \
+      --replace-fail '(defcustom crate-rustc-program "rustc"' \
+                     '(defcustom crate-rustc-program "${lib.getExe rustc}"'
   '';
 
   checkPhase = ''
