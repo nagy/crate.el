@@ -364,10 +364,16 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
     (forward-line (1- line))))
 
 (ert-deftest crate-tree-mode-header ()
-  "The header names the crate and the row count."
+  "The header line holds the column titles, without a summary."
   (crate-tree-test--with-buffer
-    (should (string-match-p "harness" header-line-format))
-    (should (string-match-p "rows" header-line-format))))
+    (should (equal (mapcar #'car (append tabulated-list-format nil))
+                   '("Kind" "Name" "Vis" "Location" "Docs")))
+    (should header-line-format)
+    ;; The line carries no row count, filter or sort note of its own.
+    (should-not (string-match-p
+                 "rows\\|public only\\|focus:"
+                 (mapconcat (lambda (part) (if (stringp part) part ""))
+                            header-line-format "")))))
 
 (ert-deftest crate-tree-mode-entries ()
   "One entry per row, keyed by item path."
@@ -463,8 +469,7 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
     (should-not (member "harness::api::net::handshake"
                         (crate-tree-test--row-ids)))
     (should (member "harness::api::net::connect"
-                    (crate-tree-test--row-ids)))
-    (should (string-match-p "public only" header-line-format))))
+                    (crate-tree-test--row-ids)))))
 
 (ert-deftest crate-tree-mode-kind-filter ()
   "The kind filter shows the named kinds alone."
@@ -485,8 +490,7 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
                      "harness::api::net::connect"
                      "harness::api::net::handshake"
                      "harness::api::net::Socket"
-                     "harness::api::net::Socket::open")))
-    (should (string-match-p "focus: net" header-line-format))))
+                     "harness::api::net::Socket::open")))))
 
 (ert-deftest crate-tree-mode-reset-filters ()
   "The reset command drops every filter."
@@ -549,6 +553,52 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
         (when-let* ((buffer (find-buffer-visiting file)))
           (kill-buffer buffer))
         (delete-directory directory t)))))
+
+(ert-deftest crate-tree-mode-visit-workspace-span ()
+  "A span that rustdoc wrote against the workspace root opens."
+  (crate-tree-test--with-buffer
+    (let* ((root (make-temp-file "crate-tree-ws-" t))
+           (member (expand-file-name "crates/member/" root))
+           (relative "crates/member/src/lib.rs")
+           (file (expand-file-name relative root)))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "src" member) t)
+            (with-temp-file (expand-file-name "Cargo.toml" root)
+              (insert "[workspace]\n"))
+            (with-temp-file (expand-file-name "Cargo.toml" member)
+              (insert "[package]\nname = \"member\"\n"))
+            (with-temp-file file
+              (dotimes (line 100)
+                (insert (format "// line %d\n" (1+ line)))))
+            (setq-local crate-tree--directory (directory-file-name member))
+            (crate-tree-test--goto "harness::Half::fetch")
+            (crate-tree-visit)
+            (should (equal (buffer-file-name) file)))
+        (when-let* ((buffer (find-buffer-visiting file)))
+          (kill-buffer buffer))
+        (delete-directory root t)))))
+
+(ert-deftest crate-tree-source-file-prefers-the-package ()
+  "A span relative to the package answers before the workspace root."
+  (let* ((root (make-temp-file "crate-tree-ws-" t))
+         (member (expand-file-name "crates/member/" root)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "src" member) t)
+          (with-temp-file (expand-file-name "Cargo.toml" root)
+            (insert "[workspace]\n"))
+          (with-temp-file (expand-file-name "Cargo.toml" member)
+            (insert "[package]\nname = \"member\"\n"))
+          (with-temp-file (expand-file-name "src/lib.rs" member)
+            (insert "//\n"))
+          (should (equal (crate-tree--source-file member "src/lib.rs")
+                         (expand-file-name "src/lib.rs" member)))
+          ;; A path that no base holds answers the package directory,
+          ;; so the reader still lands in the crate.
+          (should (equal (crate-tree--source-file member "src/gone.rs")
+                         (expand-file-name "src/gone.rs" member))))
+      (delete-directory root t))))
 
 (ert-deftest crate-tree-mode-empty-buffer ()
   "A tree buffer without JSON says so."

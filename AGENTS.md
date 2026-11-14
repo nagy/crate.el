@@ -216,8 +216,15 @@ The name cell carries the fold marker, the indentation and the child
 count of a folded row.  The marker alone carries a `keymap` text
 property for `mouse-1`, because a click on a name selects the row.
 The printer adds `help-echo` with the full item path and the doc
-comment.  The `%` of the header line names the row count, the public
-filter and the focus.
+comment.  The header line carries the column titles that
+`tabulated-list-init-header` builds, and no summary line, so a
+filter or a sort shows in the rows alone.
+
+`crate-tree-visit` reads a span filename.  Rustdoc writes that name
+relative to the package, or to the workspace root of one member, so
+`crate-tree--source-file` tries the crate directory and then every
+ancestor that holds a `Cargo.toml`.  A join against the crate
+directory alone doubled the member path of a workspace crate.
 
 Depth keys `1` to `9` set `crate-tree--max-depth` to one less, and
 `9` means nil (every depth).  The keymap overrides the digit argument

@@ -611,7 +611,6 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (setq-local revert-buffer-function #'crate-tree--revert)
   (setq-local bookmark-make-record-function
               #'crate-tree--bookmark-make-record)
-  (setq-local header-line-format nil)
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
@@ -1054,17 +1053,6 @@ Docs column takes the rest."
 
 ;;; Rendering
 
-(defun crate-tree--header-line (rows)
-  "Return the header line of the table for ROWS."
-  (concat
-   (propertize (or crate-tree--name "Crate tree") 'face 'bold)
-   (format "  ·  %d rows" (length rows))
-   (if crate-tree--public-only "  ·  public only" "")
-   (if crate-tree--focus (format "  ·  focus: %s" crate-tree--focus) "")
-   (unless (equal crate-tree--sort 'source)
-     (format "  ·  sorted by %s%s" crate-tree--sort
-             (if crate-tree--reverse " (reversed)" "")))))
-
 (defun crate-tree--fill-items (rows)
   "Store the items of ROWS in `crate-tree--items'."
   (setq crate-tree--items (make-hash-table :test #'equal))
@@ -1102,7 +1090,6 @@ Docs column takes the rest."
     (setq-local tabulated-list-format (crate-tree--format rows))
     (tabulated-list-init-header)
     (setq-local tabulated-list-entries entries)
-    (setq-local header-line-format (crate-tree--header-line rows))
     (tabulated-list-print t)
     (when crate-tree--pending-row
       (when (crate-tree--goto-path crate-tree--pending-row)
@@ -1301,6 +1288,36 @@ alone."
       (user-error "No item at point"))
     (browse-url (crate-tree--docs-url path))))
 
+(defun crate-tree--source-bases (directory)
+  "Return the base directories that a span may be relative to for DIRECTORY.
+The crate directory comes first, then its ancestors that hold a
+`Cargo.toml', so a member of a workspace answers both its own
+spans and the spans that rustdoc writes against the root."
+  (declare (side-effect-free t))
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (bases (list directory))
+         (parent (file-name-directory (directory-file-name directory))))
+    (while (and parent
+                (not (equal parent
+                            (file-name-directory
+                             (directory-file-name parent)))))
+      (when (file-exists-p (expand-file-name "Cargo.toml" parent))
+        (setq bases (append bases (list parent))))
+      (setq parent (file-name-directory (directory-file-name parent))))
+    bases))
+
+(defun crate-tree--source-file (directory file)
+  "Return the source file of DIRECTORY that FILE names.
+Rustdoc writes a filename relative to the package, or to the
+workspace root of one member, so the first base that holds the
+file answers."
+  (declare (side-effect-free t))
+  (let ((bases (crate-tree--source-bases directory)))
+    (or (seq-find #'file-exists-p
+                  (mapcar (lambda (base) (expand-file-name file base))
+                          bases))
+        (expand-file-name file (car bases)))))
+
 (defun crate-tree-visit ()
   "Open the source of the row at point.
 A crate that came from the database carries no source on disk, so
@@ -1314,7 +1331,7 @@ this command signals a `user-error' there."
     (let ((span (crate-tree-item-span item)))
       (unless span
         (user-error "%s carries no span" (crate-tree-item-name item)))
-      (find-file (expand-file-name (car span) crate-tree--directory))
+      (find-file (crate-tree--source-file crate-tree--directory (car span)))
       (goto-char (point-min))
       (forward-line (1- (cadr span))))))
 
