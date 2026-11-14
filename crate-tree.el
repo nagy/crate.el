@@ -314,6 +314,92 @@ parser does not read."
                         (root-name (gethash "name" root)))
               (walk root (list root-name) "" nil t nil))))))))
 
+;;; Rows
+
+(defconst crate-tree--default-kinds
+  '(module struct union enum trait type-alias function)
+  "Kinds that a tree shows before a filter command runs.
+The set matches what `cargo-modules structure' prints.")
+
+(defun crate-tree--sort-value (item key)
+  "Return the value of ITEM that sort KEY compares."
+  (pcase key
+    ('kind (crate-tree-item-kind-word item))
+    ('visibility (crate-tree-item-vis-word item))
+    (_ (or (crate-tree-item-name item) ""))))
+
+(defun crate-tree--sort-children (items state)
+  "Return ITEMS in the sibling order that STATE asks for.
+The source order stands unless STATE names another sort key.  A
+reversed order reverses the whole list, not one key."
+  (let ((key (plist-get state :sort)))
+    (if (or (null key) (eq key 'source))
+        (copy-sequence items)
+      (let ((sorted
+             (sort (copy-sequence items)
+                   (lambda (first second)
+                     (let ((left (crate-tree--sort-value first key))
+                           (right (crate-tree--sort-value second key)))
+                       (if (equal left right)
+                           (string< (or (crate-tree-item-name first) "")
+                                    (or (crate-tree-item-name second) ""))
+                         (string< left right)))))))
+        (if (plist-get state :reverse) (nreverse sorted) sorted)))))
+
+(defun crate-tree--focus-keep-p (item focus cache)
+  "Return non-nil when ITEM or a descendant matches FOCUS.
+CACHE memoizes the answer by item path, so one pass costs one match
+per item."
+  (let* ((path (crate-tree-item-path item))
+         (cached (gethash path cache :unset)))
+    (if (not (eq cached :unset))
+        cached
+      (let ((keep (or (string-match-p focus path)
+                      (seq-some (lambda (child)
+                                  (crate-tree--focus-keep-p child focus cache))
+                                (crate-tree-item-children item)))))
+        (puthash path keep cache)
+        keep))))
+
+(defun crate-tree--rows (root state)
+  "Return ROOT flattened into the (ITEM . DEPTH) rows that STATE shows.
+STATE is a plist.  `:folded' holds a hash set of folded paths, `:kinds'
+holds a list of shown kinds, and `:public-only', `:focus',
+`:max-depth', `:sort' and `:reverse' follow.  ROOT always shows, and
+a folded item keeps its own row and drops its children."
+  (declare (side-effect-free t))
+  (let ((folded (plist-get state :folded))
+        (kinds (if (plist-member state :kinds)
+                   (plist-get state :kinds)
+                 crate-tree--default-kinds))
+        (public-only (plist-get state :public-only))
+        (focus (plist-get state :focus))
+        (max-depth (plist-get state :max-depth))
+        (focus-cache (make-hash-table :test #'equal)))
+    (cl-labels
+        ((shown-p (item inside)
+           (or inside
+               (and (memq (crate-tree-item-kind item) kinds)
+                    (or (not public-only)
+                        (equal (crate-tree-item-vis-word item) "pub"))
+                    (or (null focus)
+                        (crate-tree--focus-keep-p item focus focus-cache)))))
+         (walk (item depth inside)
+           (when (or (= depth 0) (shown-p item inside))
+             (let ((inside (or inside
+                               (and focus
+                                    (string-match-p
+                                     focus (crate-tree-item-path item))))))
+               (cons (cons item depth)
+                     (when (and (not (and folded
+                                          (gethash (crate-tree-item-path item)
+                                                   folded)))
+                                (or (null max-depth) (< depth max-depth)))
+                       (mapcan (lambda (child) (walk child (1+ depth) inside))
+                               (crate-tree--sort-children
+                                (crate-tree-item-children item) state))))))))
+      (walk root 0 nil))))
+
 ;;; The `cargo-modules structure' format
 
 (defun crate-tree--structure-print-p (item)

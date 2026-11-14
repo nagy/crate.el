@@ -47,10 +47,14 @@
                 (goto-char (point-min))
                 (json-parse-buffer))))))
 
+(defvar crate-tree-test--tree nil
+  "Parsed fixture tree, built once per session.")
+
 (defun crate-tree-test--root ()
   "Return the fixture tree root, or nil when the document is absent."
   (when-let* ((json (crate-tree-test--json)))
-    (crate-tree--items json)))
+    (or crate-tree-test--tree
+        (setq crate-tree-test--tree (crate-tree--items json)))))
 
 (defmacro crate-tree-test--with-root (&rest body)
   "Run BODY with `root' bound to the fixture tree.
@@ -212,6 +216,117 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
   "A value that holds no rustdoc document answers nil."
   (should-not (crate-tree--items nil))
   (should-not (crate-tree--items (make-hash-table :test #'equal))))
+
+;;; Rows
+
+(defun crate-tree-test--row-names (state)
+  "Return the names of the rows that STATE shows."
+  (mapcar (lambda (row) (crate-tree-item-name (car row)))
+          (crate-tree--rows (crate-tree-test--root) state)))
+
+(defun crate-tree-test--folded (&rest paths)
+  "Return a fold set that holds PATHS."
+  (let ((folded (make-hash-table :test #'equal)))
+    (dolist (path paths)
+      (puthash path t folded))
+    folded))
+
+(ert-deftest crate-tree-rows-default-order ()
+  "The default state shows every kind of the cargo-modules set, in source order."
+  (crate-tree-test--with-root
+    (let ((rows (crate-tree--rows root nil)))
+      (should (equal (mapcar (lambda (row) (crate-tree-item-name (car row)))
+                             (seq-take rows 5))
+                     '("harness" "api" "net" "connect" "handshake")))
+      (should (equal (mapcar #'cdr (seq-take rows 3)) '(0 1 2)))
+      (should (equal (crate-tree-item-name (car (car (last rows)))) "name")))))
+
+(ert-deftest crate-tree-rows-default-kinds-drop-extra-kinds ()
+  "Fields, variants, consts, statics, macros and uses stay hidden by default."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names nil)))
+      (dolist (name '("left" "Red" "LIMIT" "NAME" "make_half"))
+        (should-not (member name names))))))
+
+(ert-deftest crate-tree-rows-kind-filter ()
+  "The kind list gates a whole subtree, and the root never drops."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names '(:kinds (module)))))
+      (should (equal names '("harness" "api" "net" "parse" "hidden"
+                             "inner" "money" "currency"))))
+    (should (equal (crate-tree-test--row-names '(:kinds ())) '("harness")))))
+
+(ert-deftest crate-tree-rows-extra-kinds ()
+  "A kind list that names a field shows the field and its parent."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names
+                  '(:kinds (module struct struct-field function)))))
+      (should (member "left" names))
+      (should (member "right" names))
+      (should (member "Half" names))
+      (should-not (member "Red" names)))))
+
+(ert-deftest crate-tree-rows-fold ()
+  "A folded item keeps its row and hides every descendant."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names
+                  (list :folded (crate-tree-test--folded "harness::api")))))
+      (should (member "api" names))
+      (should-not (member "net" names))
+      (should-not (member "connect" names))
+      (should (member "hidden" names)))))
+
+(ert-deftest crate-tree-rows-fold-keeps-depth ()
+  "A fold leaves the depth of the rows around it alone."
+  (crate-tree-test--with-root
+    (let* ((state (list :folded (crate-tree-test--folded "harness::api")))
+           (rows (crate-tree--rows root state))
+           (hidden (seq-find (lambda (row)
+                               (equal (crate-tree-item-name (car row))
+                                      "hidden"))
+                             rows)))
+      (should (equal (cdr hidden) 1)))))
+
+(ert-deftest crate-tree-rows-public-only ()
+  "The public filter drops a non-public item and its subtree."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names '(:public-only t))))
+      (should (member "connect" names))
+      (should-not (member "handshake" names))
+      (should-not (member "root_private" names))
+      (should-not (member "hidden" names))
+      ;; `hidden_public' is reachable from nowhere, because its module
+      ;; is not public, so the filter drops it with its module.
+      (should-not (member "hidden_public" names)))))
+
+(ert-deftest crate-tree-rows-max-depth ()
+  "The depth limit cuts every row below it."
+  (crate-tree-test--with-root
+    (let ((rows (crate-tree--rows root '(:max-depth 1))))
+      (should (seq-every-p (lambda (row) (<= (cdr row) 1)) rows))
+      (should (= (length rows) 10)))))
+
+(ert-deftest crate-tree-rows-focus ()
+  "The focus keeps the matching subtree and the ancestors of the match."
+  (crate-tree-test--with-root
+    (should (equal (crate-tree-test--row-names '(:focus "net"))
+                   '("harness" "api" "net" "connect" "handshake"
+                     "Socket" "open")))))
+
+(ert-deftest crate-tree-rows-sort-name ()
+  "A name sort orders every sibling list, parents first."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names '(:sort name))))
+      (should (equal (seq-take names 3) '("harness" "Alias" "Color")))
+      (should (equal (seq-drop names (- (length names) 2))
+                     '("root_private" "root_public"))))))
+
+(ert-deftest crate-tree-rows-sort-reverse ()
+  "A reversed sort reverses the whole list."
+  (crate-tree-test--with-root
+    (let ((names (crate-tree-test--row-names '(:sort name :reverse t))))
+      (should (equal (seq-take names 3) '("harness" "root_public"
+                                          "root_private"))))))
 
 ;;; The `cargo-modules structure' format
 

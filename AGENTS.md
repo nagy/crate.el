@@ -142,6 +142,17 @@ and any other path reads `pub(in crate::…)`.  Rustdoc reports a
 private item of a `pub(crate)` type as restricted to the crate, so
 `pub(crate)` covers it.
 
+`crate-tree--rows` flattens the tree into `(ITEM . DEPTH)` conses for
+the state that a buffer holds: `:folded` (a hash set keyed by path),
+`:kinds`, `:public-only`, `:focus` (a regexp on the path),
+`:max-depth`, `:sort` and `:reverse`.  The root row always survives a
+filter.  A folded item keeps its own row and drops its subtree, and a
+filtered item drops its subtree too.  The focus keeps the matching
+subtree and the ancestors of the match, so no row loses its parent.
+`(plist-member state :kinds)` tells an empty kind list from an absent
+key, so `:kinds ()` shows the root alone, and a nil `:kinds` means
+`crate-tree--default-kinds`.
+
 The parser keeps source order.  `crate-tree--structure-text` sorts
 every sibling list by name and prints the `cargo-modules structure`
 format.  `test/fixtures/harness.structure.txt` holds the output of
