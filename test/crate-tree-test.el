@@ -786,10 +786,13 @@ library."
 (ert-deftest crate-insert-structure-renders ()
   "The Structure section holds the button that opens the table."
   (with-temp-buffer
+    (insert "body\n")
     (crate-insert-structure)
     (let ((text (buffer-substring-no-properties
                  (point-min) (point-max))))
-      (should (string-match-p "Structure" text))
+      ;; A blank line separates it from the section above, like every
+      ;; other inserter.
+      (should (string-match-p "\\`body\n\nStructure" text))
       (should (string-match-p "open the crate tree" text)))))
 
 (ert-deftest crate-detail-hook-holds-structure ()

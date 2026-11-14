@@ -1188,6 +1188,7 @@ fold of a module and the line of point survive a render."
   "Insert the Structure section of the current crate.
 The section holds one button, which opens the item structure table
 of the crate that the buffer shows."
+  (insert "\n")
   (magit-insert-section (crate-structure)
     (magit-insert-heading "Structure")
     (insert "  ")
