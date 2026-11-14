@@ -213,6 +213,25 @@ Depth keys `1` to `9` set `crate-tree--max-depth` to one less, and
 `9` means nil (every depth).  The keymap overrides the digit argument
 of `tabulated-list-mode-map`, which this mode never needs.
 
+### Tree bookmarks
+
+`crate-tree--bookmark-make-record` saves the source (a name or a
+directory), the fold set, the kind list, the public flag, the focus,
+the depth, the sort and the row at point.  The label reads
+`Crate tree: NAME` or `Crate tree: NAME (PATH)`.
+
+`crate-tree-bookmark-jump` opens the buffer and applies the record.  A
+build that still runs prints no row, so the jump leaves the row path
+in `crate-tree--pending-row`, and `crate-tree--reprint` moves point
+once the row appears.  A fold path that the rebuilt tree lacks stays in
+the set and hides nothing, so an old bookmark still opens.
+
+`bookmark-prop-get` answers nil for an absent key and for a saved nil
+alike, so the kind list, the depth and the sort read the record props
+through `crate-tree--bookmark-prop-set-p` before they replace the
+buffer state.  Without that test an old record with no `kinds` would
+set an empty kind list and show the crate row alone.
+
 ### Entry points
 
 `S` in `crate-mode` and in `crate-browse-mode` runs `crate-tree-show`,

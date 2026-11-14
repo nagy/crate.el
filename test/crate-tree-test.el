@@ -823,6 +823,151 @@ library."
         (crate-tree-copy-dependency))
       (should (equal copied "my-crate = \"0.3.0\"")))))
 
+
+;;; Bookmarks
+
+(defun crate-tree-test--bookmark-record (props)
+  "Return a bookmark record named `Crate tree' with PROPS.
+PROPS are (SYMBOL . VALUE) conses, the shape that
+`bookmark-prop-get' reads."
+  (cons "Crate tree" props))
+
+(ert-deftest crate-tree-bookmark-record ()
+  "The record holds the view state of the table."
+  (crate-tree-test--with-buffer
+    (puthash "harness::api" t crate-tree--folded)
+    (setq-local crate-tree--kinds '(module))
+    (setq-local crate-tree--public-only t)
+    (setq-local crate-tree--focus "api")
+    (setq-local crate-tree--max-depth 1)
+    (setq-local crate-tree--sort 'name)
+    (setq-local crate-tree--reverse t)
+    (crate-tree--reprint)
+    (crate-tree-test--goto "harness::api")
+    (let ((record (crate-tree--bookmark-make-record)))
+      (should (equal (car record) "Crate tree: harness"))
+      (should (eq (bookmark-prop-get record 'handler)
+                  'crate-tree-bookmark-jump))
+      (should (equal (bookmark-prop-get record 'crate) "harness"))
+      (should-not (bookmark-prop-get record 'directory))
+      (should (equal (bookmark-prop-get record 'folds) '("harness::api")))
+      (should (equal (bookmark-prop-get record 'kinds) '(module)))
+      (should (bookmark-prop-get record 'public))
+      (should (equal (bookmark-prop-get record 'focus) "api"))
+      (should (equal (bookmark-prop-get record 'depth) 1))
+      (should (eq (bookmark-prop-get record 'sort) 'name))
+      (should (bookmark-prop-get record 'reverse))
+      (should (equal (bookmark-prop-get record 'row) "harness::api")))))
+
+(ert-deftest crate-tree-mode-bookmark-function ()
+  "The mode installs its bookmark record function."
+  (crate-tree-test--with-buffer
+    (should (eq bookmark-make-record-function
+                'crate-tree--bookmark-make-record))))
+
+(ert-deftest crate-tree-bookmark-handler-type ()
+  "The handler names its own type in the bookmark menu."
+  (should (equal (get 'crate-tree-bookmark-jump 'bookmark-handler-type)
+                 "Crate tree")))
+
+(ert-deftest crate-tree-bookmark-jump-database ()
+  "A jump restores the folds, the filters and the row at point."
+  (let ((displayed nil)
+        (record (crate-tree-test--bookmark-record
+                 '((handler . crate-tree-bookmark-jump)
+                   (crate . "harness")
+                   (directory)
+                   (folds . ("harness::api"))
+                   (kinds . (module))
+                   (public . t)
+                   (focus . "api")
+                   (depth . 1)
+                   (sort . name)
+                   (reverse . t)
+                   (row . "harness::api")))))
+    (cl-letf (((symbol-function 'crate-doc--json)
+               (lambda (_name) (crate-tree-test--json)))
+              ((symbol-function 'crate--display-buffer)
+               (lambda (buffer)
+                 (setq displayed (get-buffer-create buffer))
+                 (set-buffer displayed))))
+      (unwind-protect
+          (progn
+            (crate-tree-bookmark-jump record)
+            (with-current-buffer displayed
+              (should crate-tree--public-only)
+              (should (equal crate-tree--kinds '(module)))
+              (should (equal crate-tree--focus "api"))
+              (should (equal crate-tree--max-depth 1))
+              (should (eq crate-tree--sort 'name))
+              (should crate-tree--reverse)
+              (should (gethash "harness::api" crate-tree--folded))
+              (should (equal (tabulated-list-get-id) "harness::api"))))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))))))
+
+(ert-deftest crate-tree-bookmark-jump-local ()
+  "A jump with a directory reopens that checkout."
+  (crate-test--with-local-crate dir
+    (let* ((displayed nil)
+           (record (crate-tree-test--bookmark-record
+                    `((handler . crate-tree-bookmark-jump)
+                      (crate . "my-crate")
+                      (directory . ,dir)
+                      (folds)
+                      (kinds . (module))
+                      (row . "harness")))))
+      (cl-letf (((symbol-function 'crate-tree--json)
+                 (lambda (_directory) (crate-tree-test--json)))
+                ((symbol-function 'crate--display-buffer)
+                 (lambda (buffer)
+                   (setq displayed (get-buffer-create buffer))
+                   (set-buffer displayed))))
+        (unwind-protect
+            (progn
+              (crate-tree-bookmark-jump record)
+              (with-current-buffer displayed
+                (should (equal (buffer-name)
+                               (format "Crate Tree: my-crate (%s)"
+                                       (directory-file-name dir))))
+                (should (equal (tabulated-list-get-id) "harness"))))
+          (when (buffer-live-p displayed)
+            (kill-buffer displayed)))))))
+
+(ert-deftest crate-tree-bookmark-jump-missing-directory ()
+  "A jump to a crate directory that left the disk refuses to open."
+  (let ((record (crate-tree-test--bookmark-record
+                 '((handler . crate-tree-bookmark-jump)
+                   (crate . "my-crate")
+                   (directory . "/nonexistent/crate")
+                   (folds)))))
+    (should-error (crate-tree-bookmark-jump record) :type 'user-error)))
+
+(ert-deftest crate-tree-bookmark-stale-fold ()
+  "A fold path that the rebuilt tree lacks hides nothing."
+  (let ((displayed nil)
+        (record (crate-tree-test--bookmark-record
+                 '((handler . crate-tree-bookmark-jump)
+                   (crate . "harness")
+                   (directory)
+                   (folds . ("harness::gone"))
+                   (row . "harness::api")))))
+    (cl-letf (((symbol-function 'crate-doc--json)
+               (lambda (_name) (crate-tree-test--json)))
+              ((symbol-function 'crate--display-buffer)
+               (lambda (buffer)
+                 (setq displayed (get-buffer-create buffer))
+                 (set-buffer displayed))))
+      (unwind-protect
+          (progn
+            (crate-tree-bookmark-jump record)
+            (with-current-buffer displayed
+              (should (gethash "harness::gone" crate-tree--folded))
+              (should (member "harness::api::net"
+                              (mapcar #'car tabulated-list-entries)))))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))))))
+
 ;;; The `cargo-modules structure' format
 
 (ert-deftest crate-tree-structure-matches-cargo-modules ()

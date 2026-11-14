@@ -160,7 +160,9 @@ every filter.  =RET= opens the source of a local crate, =C-c C-o=
 opens the docs.rs page, =y= copies the item path, =w= copies a
 =Cargo.toml= line, and =g= rebuilds the document.
 
-A local crate runs =cargo doc= with JSON output, which needs =cargo=,
+=C-x r m= saves the view as a bookmark, and the jump restores the
+folds, the filters, the depth, the sort and the row at point.  A local
+crate runs =cargo doc= with JSON output, which needs =cargo=,
 =rustc= and the dependencies of the crate.  A database crate reads
 the document from the Nix build that the detail buffer uses, so
 =M-x crate-tree= follows =crate-doc-enable=.

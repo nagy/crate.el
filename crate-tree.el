@@ -534,6 +534,32 @@ names the subset that a fresh table shows.")
 (defvar-local crate-tree--items nil
   "Hash table from an item path to the item of the last print.")
 
+(defvar-local crate-tree--pending-row nil
+  "Item path that the next print puts point on, or nil.
+A bookmark jump sets it, because a build that still runs leaves no
+row to move to at once.")
+
+(defun crate-tree--bookmark-make-record ()
+  "Return a bookmark record for the current tree buffer.
+The record holds the source, the fold set, the filters, the depth,
+the sort and the row at point, so a jump lands on the same view."
+  (let ((label (if crate-tree--directory
+                   (format "Crate tree: %s (%s)"
+                           crate-tree--name crate-tree--directory)
+                 (format "Crate tree: %s" crate-tree--name))))
+    `(,label
+      (handler . crate-tree-bookmark-jump)
+      (crate . ,crate-tree--name)
+      (directory . ,crate-tree--directory)
+      (folds . ,(hash-table-keys crate-tree--folded))
+      (kinds . ,crate-tree--kinds)
+      (public . ,crate-tree--public-only)
+      (focus . ,crate-tree--focus)
+      (depth . ,crate-tree--max-depth)
+      (sort . ,crate-tree--sort)
+      (reverse . ,crate-tree--reverse)
+      (row . ,(tabulated-list-get-id)))))
+
 (defvar-keymap crate-tree-filter-map
   :doc "Filter keymap for `crate-tree-mode'."
   "p" #'crate-tree-toggle-public
@@ -583,6 +609,8 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (setq-local tabulated-list-format (crate-tree--format nil))
   (setq-local tabulated-list-printer #'crate-tree--print-entry)
   (setq-local revert-buffer-function #'crate-tree--revert)
+  (setq-local bookmark-make-record-function
+              #'crate-tree--bookmark-make-record)
   (setq-local header-line-format nil)
   (tabulated-list-init-header)
   (hl-line-mode 1))
@@ -972,6 +1000,16 @@ Docs column takes the rest."
     (puthash (crate-tree-item-path (car row)) (car row)
              crate-tree--items)))
 
+(defun crate-tree--goto-path (path)
+  "Move point to the row of PATH, and answer non-nil when it exists."
+  (let ((index (seq-position (mapcar #'car tabulated-list-entries)
+                             path #'equal)))
+    (when index
+      (goto-char (point-min))
+      (forward-line index)
+      (beginning-of-line)
+      t)))
+
 (defun crate-tree--reprint ()
   "Print the table from the state of the current buffer."
   (let* ((rows (if crate-tree--root
@@ -984,6 +1022,9 @@ Docs column takes the rest."
     (setq-local tabulated-list-entries entries)
     (setq-local header-line-format (crate-tree--header-line rows))
     (tabulated-list-print t)
+    (when crate-tree--pending-row
+      (when (crate-tree--goto-path crate-tree--pending-row)
+        (setq crate-tree--pending-row nil)))
     (when (null rows)
       (let ((inhibit-read-only t))
         (insert (propertize "No rustdoc JSON yet." 'face 'shadow) "\n")))))
@@ -991,6 +1032,50 @@ Docs column takes the rest."
 (defun crate-tree--revert (&rest _ignored)
   "Rebuild the rustdoc JSON of the buffer source, then reprint."
   (crate-tree--refresh))
+
+;;; Bookmarks
+
+(defun crate-tree--bookmark-prop-set-p (record property)
+  "Return non-nil when RECORD carries PROPERTY.
+`bookmark-prop-get' answers nil for an absent key and for a saved
+nil alike, so a key that holds a list needs this test."
+  (assq property (cdr record)))
+
+(defun crate-tree--restore-bookmark (record)
+  "Apply the view of RECORD to the current tree buffer.
+A fold path that the rebuilt tree no longer holds stays in the set
+and hides nothing, so a stale record still opens."
+  (when (crate-tree--bookmark-prop-set-p record 'folds)
+    (setq crate-tree--folded (make-hash-table :test #'equal))
+    (dolist (path (bookmark-prop-get record 'folds))
+      (when (stringp path)
+        (puthash path t crate-tree--folded))))
+  (when (crate-tree--bookmark-prop-set-p record 'kinds)
+    (setq crate-tree--kinds (bookmark-prop-get record 'kinds)))
+  (setq crate-tree--public-only (and (bookmark-prop-get record 'public) t))
+  (setq crate-tree--focus (bookmark-prop-get record 'focus))
+  (when (crate-tree--bookmark-prop-set-p record 'depth)
+    (setq crate-tree--max-depth (bookmark-prop-get record 'depth)))
+  (when (crate-tree--bookmark-prop-set-p record 'sort)
+    (setq crate-tree--sort (bookmark-prop-get record 'sort)))
+  (setq crate-tree--reverse (and (bookmark-prop-get record 'reverse) t))
+  (setq crate-tree--pending-row
+        (bookmark-prop-get record 'row))
+  (crate-tree--reprint))
+
+(defun crate-tree-bookmark-jump (record)
+  "Restore a crate tree bookmark RECORD.
+A record that names a directory reopens that checkout, and a record
+without one reopens the database crate."
+  (interactive (list (read-from-minibuffer "Bookmark: ")))
+  (let ((name (bookmark-prop-get record 'crate))
+        (directory (bookmark-prop-get record 'directory)))
+    (when (and directory
+               (not (file-exists-p (crate-local--manifest directory))))
+      (user-error "No crate in `%s'" directory))
+    (crate-tree--open name directory)
+    (crate-tree--restore-bookmark record)))
+(put 'crate-tree-bookmark-jump 'bookmark-handler-type "Crate tree")
 
 ;;; Row commands
 
