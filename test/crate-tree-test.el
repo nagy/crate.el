@@ -328,6 +328,236 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
       (should (equal (seq-take names 3) '("harness" "root_public"
                                           "root_private"))))))
 
+
+;;; Mode
+
+(defmacro crate-tree-test--with-buffer (&rest body)
+  "Run BODY in a `crate-tree-mode' buffer of the fixture crate."
+  (declare (indent 0) (debug t))
+  `(let ((root (crate-tree-test--root)))
+     (unless root
+       (ert-skip "Fixture rustdoc JSON is absent"))
+     (with-temp-buffer
+       (crate-tree-mode)
+       (setq-local crate-tree--root root)
+       (setq-local crate-tree--name "harness")
+       (crate-tree--reprint)
+       ,@body)))
+
+(defun crate-tree-test--row-ids ()
+  "Return the ids of the printed rows, in print order."
+  (mapcar #'car tabulated-list-entries))
+
+(defun crate-tree-test--goto (path)
+  "Move point to the row of PATH."
+  (let ((line 1)
+        (found nil))
+    (dolist (entry tabulated-list-entries)
+      (when (and (not found) (equal (car entry) path))
+        (setq found t))
+      (unless found
+        (setq line (1+ line))))
+    (unless found
+      (error "No row for %s" path))
+    (goto-char (point-min))
+    (forward-line (1- line))))
+
+(ert-deftest crate-tree-mode-header ()
+  "The header names the crate and the row count."
+  (crate-tree-test--with-buffer
+    (should (string-match-p "harness" header-line-format))
+    (should (string-match-p "rows" header-line-format))))
+
+(ert-deftest crate-tree-mode-entries ()
+  "One entry per row, keyed by item path."
+  (crate-tree-test--with-buffer
+    (should (equal (crate-tree-test--row-ids)
+                   (mapcar (lambda (row)
+                             (crate-tree-item-path (car row)))
+                           (crate-tree--rows root nil))))
+    (should (equal (car (crate-tree-test--row-ids)) "harness"))))
+
+(ert-deftest crate-tree-mode-columns ()
+  "A printed row carries the five cells."
+  (crate-tree-test--with-buffer
+    (goto-char (point-min))
+    (forward-line 1)
+    (should (looking-at-p "[[:space:]]*mod[[:space:]]+▾ api"))
+    (let ((line (buffer-substring-no-properties
+                 (line-beginning-position) (line-end-position))))
+      (should (string-match-p "pub" line))
+      (should (string-match-p "api.rs:1" line))
+      (should (string-match-p "Request handling." line)))))
+
+(ert-deftest crate-tree-mode-toggle-folds ()
+  "`TAB' hides the children of the row at point."
+  (crate-tree-test--with-buffer
+    (crate-tree-test--goto "harness::api")
+    (crate-tree-toggle)
+    (let ((ids (crate-tree-test--row-ids)))
+      (should (member "harness::api" ids))
+      (should-not (member "harness::api::net" ids)))
+    (should (string-match-p "(3)" (buffer-substring-no-properties
+                                   (point-min) (point-max))))))
+
+(ert-deftest crate-tree-mode-toggle-unfolds ()
+  "A second `TAB' shows the children again."
+  (crate-tree-test--with-buffer
+    (crate-tree-test--goto "harness::api")
+    (crate-tree-toggle)
+    (crate-tree-test--goto "harness::api")
+    (crate-tree-toggle)
+    (should (member "harness::api::net" (crate-tree-test--row-ids)))))
+
+(ert-deftest crate-tree-mode-reprint-keeps-point ()
+  "A reprint that hides rows above point leaves point on its row."
+  (crate-tree-test--with-buffer
+    (crate-tree-test--goto "harness::Half")
+    (let ((id (tabulated-list-get-id)))
+      (puthash "harness::api" t crate-tree--folded)
+      (crate-tree--reprint)
+      (should (equal (tabulated-list-get-id) id)))))
+
+(ert-deftest crate-tree-mode-depth ()
+  "The depth keys cut the rows below the depth."
+  (crate-tree-test--with-buffer
+    (crate-tree-set-depth 2)
+    (should (= (length tabulated-list-entries) 10))
+    (crate-tree-set-depth 9)
+    (should (equal (crate-tree-test--row-ids)
+                   (mapcar (lambda (row) (crate-tree-item-path (car row)))
+                           (crate-tree--rows root nil))))))
+
+(ert-deftest crate-tree-mode-sort-cycle ()
+  "The sort command cycles through the four keys."
+  (crate-tree-test--with-buffer
+    (should (eq crate-tree--sort 'source))
+    (crate-tree-sort)
+    (should (eq crate-tree--sort 'name))
+    (should (equal (nth 1 (crate-tree-test--row-ids)) "harness::Alias"))
+    (crate-tree-sort)
+    (should (eq crate-tree--sort 'kind))
+    (crate-tree-sort)
+    (should (eq crate-tree--sort 'visibility))
+    (crate-tree-sort)
+    (should (eq crate-tree--sort 'source))))
+
+(ert-deftest crate-tree-mode-reverse-sort ()
+  "The reverse command turns the sibling order around."
+  (crate-tree-test--with-buffer
+    (crate-tree-reverse-sort)
+    (should crate-tree--reverse)
+    ;; The last declared child of the root that the default kind
+    ;; list shows comes first.
+    (should (equal (nth 1 (crate-tree-test--row-ids))
+                   "harness::Color"))
+    (crate-tree-reverse-sort)
+    (should-not crate-tree--reverse)))
+
+(ert-deftest crate-tree-mode-public-only ()
+  "The public filter drops a non-public row."
+  (crate-tree-test--with-buffer
+    (crate-tree-toggle-public)
+    (should crate-tree--public-only)
+    (should-not (member "harness::api::net::handshake"
+                        (crate-tree-test--row-ids)))
+    (should (member "harness::api::net::connect"
+                    (crate-tree-test--row-ids)))
+    (should (string-match-p "public only" header-line-format))))
+
+(ert-deftest crate-tree-mode-kind-filter ()
+  "The kind filter shows the named kinds alone."
+  (crate-tree-test--with-buffer
+    (crate-tree-kind-filter '(module))
+    (let ((ids (crate-tree-test--row-ids)))
+      (should (member "harness::api" ids))
+      (should-not (member "harness::api::net::connect" ids)))
+    (crate-tree-kind-filter nil)
+    (should (equal (crate-tree-test--row-ids) '("harness")))))
+
+(ert-deftest crate-tree-mode-focus ()
+  "The focus keeps the matching subtree."
+  (crate-tree-test--with-buffer
+    (crate-tree-focus "net")
+    (should (equal (crate-tree-test--row-ids)
+                   '("harness" "harness::api" "harness::api::net"
+                     "harness::api::net::connect"
+                     "harness::api::net::handshake"
+                     "harness::api::net::Socket"
+                     "harness::api::net::Socket::open")))
+    (should (string-match-p "focus: net" header-line-format))))
+
+(ert-deftest crate-tree-mode-reset-filters ()
+  "The reset command drops every filter."
+  (crate-tree-test--with-buffer
+    (crate-tree-focus "net")
+    (crate-tree-toggle-public)
+    (crate-tree-kind-filter '(module))
+    (crate-tree-reset-filters)
+    (should-not crate-tree--focus)
+    (should-not crate-tree--public-only)
+    (should (equal crate-tree--kinds crate-tree--default-kinds))
+    (should (member "harness::api::net::connect"
+                    (crate-tree-test--row-ids)))))
+
+(ert-deftest crate-tree-mode-copy-path ()
+  "The copy command puts the item path on the kill ring."
+  (crate-tree-test--with-buffer
+    (let (copied)
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (text) (setq copied text))))
+        (crate-tree-test--goto "harness::money::convert")
+        (crate-tree-copy-path))
+      (should (equal copied "harness::money::convert")))))
+
+(ert-deftest crate-tree-mode-browse-url ()
+  "The browse command builds the docs.rs URL of the row."
+  (crate-tree-test--with-buffer
+    (let (opened)
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (url) (setq opened url))))
+        (crate-tree-test--goto "harness::api::net::connect")
+        (crate-tree-browse-url))
+      (should (equal opened
+                     "https://docs.rs/harness/latest/harness/api/net/connect")))))
+
+(ert-deftest crate-tree-mode-visit-without-source ()
+  "A crate with no source on disk refuses to jump."
+  (crate-tree-test--with-buffer
+    (crate-tree-test--goto "harness::Half::fetch")
+    (should-error (crate-tree-visit) :type 'user-error)))
+
+(ert-deftest crate-tree-mode-visit-source ()
+  "The visit command opens the span of the row."
+  (crate-tree-test--with-buffer
+    (let* ((directory (make-temp-file "crate-tree-test" t))
+           (file (expand-file-name "src/lib.rs" directory)))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "src" directory) t)
+            (with-temp-file file
+              (dotimes (line 100)
+                (insert (format "// line %d\n" (1+ line)))))
+            (setq-local crate-tree--directory directory)
+            (crate-tree-test--goto "harness::Half::fetch")
+            (crate-tree-visit)
+            (should (equal (buffer-file-name) file))
+            (should (equal (line-number-at-pos)
+                           (cadr (crate-tree-item-span
+                                  (crate-tree-test--item "fetch"))))))
+        (when-let* ((buffer (find-buffer-visiting file)))
+          (kill-buffer buffer))
+        (delete-directory directory t)))))
+
+(ert-deftest crate-tree-mode-empty-buffer ()
+  "A tree buffer without JSON says so."
+  (with-temp-buffer
+    (crate-tree-mode)
+    (crate-tree--reprint)
+    (should (string-match-p "No rustdoc JSON yet"
+                            (buffer-substring-no-properties
+                             (point-min) (point-max))))))
+
 ;;; The `cargo-modules structure' format
 
 (ert-deftest crate-tree-structure-matches-cargo-modules ()

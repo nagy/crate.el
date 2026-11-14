@@ -159,6 +159,37 @@ format.  `test/fixtures/harness.structure.txt` holds the output of
 that tool for the fixture crate, so one ERT test compares the two
 line by line.
 
+### Crate tree mode
+
+`crate-tree-mode` derives from `tabulated-list-mode`, so one buffer
+holds one table: Kind, Name, Vis, Location and Docs.  The caller sets
+`crate-tree--root`, `crate-tree--name` and `crate-tree--directory`
+after the mode and then calls `crate-tree--reprint`, because
+`define-derived-mode` wipes the locals.
+
+A row id is the item path, so `tabulated-list-print` with
+REMEMBER-POS leaves point on its row when a fold hides rows above it.
+Each reprint rebuilds the entries from the state, computes the column
+widths from the visible rows, and stores the visible items in
+`crate-tree--items` for the row commands.  The Docs column declares
+width 0, which `tabulated-list` reads as "take the rest of the line".
+
+`crate-tree--sort-children` reads the state and sorts a copy, so a
+sort never touches the parsed tree.  Reverse applies to the source
+order too, otherwise the reverse command would do nothing until a
+sort ran.
+
+The name cell carries the fold marker, the indentation and the child
+count of a folded row.  The marker alone carries a `keymap` text
+property for `mouse-1`, because a click on a name selects the row.
+The printer adds `help-echo` with the full item path and the doc
+comment.  The `%` of the header line names the row count, the public
+filter and the focus.
+
+Depth keys `1` to `9` set `crate-tree--max-depth` to one less, and
+`9` means nil (every depth).  The keymap overrides the digit argument
+of `tabulated-list-mode-map`, which this mode never needs.
+
 `format_version` 57 through 61 parse, because rustc 1.97 in the flake
 and rustc 1.99 on the development machine both read the fields that
 this parser uses.  Any other value signals a `user-error` instead of
@@ -566,6 +597,10 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 - A section test reads the tree (`magit-current-section`,
   `magit-section` slots) through `crate-test--section`, not the text.
   A fold test asserts `invisible-p` or `(oref section hidden)`.
+- `crate-tree-test--with-buffer` opens a `crate-tree-mode` buffer on
+  the fixture tree, and `crate-tree-test--goto` moves point to a row
+  by item path.  Assert on `tabulated-list-entries`,
+  `tabulated-list-get-id` and `header-line-format`, not on the text.
 - `crate-tree-test--item` walks the fixture tree by name, and
   `crate-tree-test--walk` visits a subtree.  Assertions read item
   slots, because the tree holds structs that no buffer shows.

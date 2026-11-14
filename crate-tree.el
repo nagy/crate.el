@@ -35,7 +35,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'tabulated-list)
 (require 'crate)
+
+(declare-function browse-url "browse-url" (url &rest args))
 
 ;;; Items
 
@@ -332,9 +335,11 @@ The set matches what `cargo-modules structure' prints.")
   "Return ITEMS in the sibling order that STATE asks for.
 The source order stands unless STATE names another sort key.  A
 reversed order reverses the whole list, not one key."
-  (let ((key (plist-get state :sort)))
+  (let ((key (plist-get state :sort))
+        (reverse (plist-get state :reverse)))
     (if (or (null key) (eq key 'source))
-        (copy-sequence items)
+        (let ((source (copy-sequence items)))
+          (if reverse (nreverse source) source))
       (let ((sorted
              (sort (copy-sequence items)
                    (lambda (first second)
@@ -344,7 +349,7 @@ reversed order reverses the whole list, not one key."
                            (string< (or (crate-tree-item-name first) "")
                                     (or (crate-tree-item-name second) ""))
                          (string< left right)))))))
-        (if (plist-get state :reverse) (nreverse sorted) sorted)))))
+        (if reverse (nreverse sorted) sorted)))))
 
 (defun crate-tree--focus-keep-p (item focus cache)
   "Return non-nil when ITEM or a descendant matches FOCUS.
@@ -446,6 +451,454 @@ The sort is stable, so two items of one name keep source order."
   (when root
     (concat (format "crate %s\n" (crate-tree-item-name root))
             (crate-tree--structure-children root ""))))
+
+;;; Faces
+
+(defface crate-tree-kind
+  '((t :inherit font-lock-keyword-face))
+  "Face for the kind word of a tree row."
+  :group 'crate)
+
+(defface crate-tree-module-name
+  '((t :inherit bold))
+  "Face for the name of a module row."
+  :group 'crate)
+
+(defface crate-tree-visibility
+  '((t :inherit font-lock-constant-face))
+  "Face for the visibility word of a tree row."
+  :group 'crate)
+
+(defface crate-tree-location
+  '((t :inherit line-number))
+  "Face for the file and line of a tree row."
+  :group 'crate)
+
+(defface crate-tree-docs
+  '((t :inherit shadow))
+  "Face for the doc summary of a tree row."
+  :group 'crate)
+
+(defface crate-tree-fold-marker
+  '((t :inherit shadow))
+  "Face for the fold marker of a row that holds children."
+  :group 'crate)
+
+(defface crate-tree-count
+  '((t :inherit shadow))
+  "Face for the count of a folded row."
+  :group 'crate)
+
+;;; Mode
+
+(defconst crate-tree--all-kinds
+  '(module struct union enum trait type-alias function constant static
+    macro use struct-field variant assoc-const assoc-type proc-macro)
+  "Every item kind that the parser emits.
+The kind filter offers this list, and `crate-tree--default-kinds'
+names the subset that a fresh table shows.")
+
+(defvar-local crate-tree--root nil
+  "Root item of the tree that the buffer shows.")
+
+(defvar-local crate-tree--name nil
+  "Name of the crate that the buffer shows.")
+
+(defvar-local crate-tree--directory nil
+  "Directory of the crate source, or nil for a crate with no source.")
+
+(defvar-local crate-tree--folded nil
+  "Hash set of the item paths that are folded.")
+
+(defvar-local crate-tree--kinds nil
+  "Item kinds that the table shows.")
+
+(defvar-local crate-tree--public-only nil
+  "When non-nil, the table shows only items of public visibility.")
+
+(defvar-local crate-tree--focus nil
+  "Regexp that keeps the matching subtree, or nil for no focus.")
+
+(defvar-local crate-tree--max-depth nil
+  "Deepest row that the table shows, or nil for every depth.")
+
+(defvar-local crate-tree--sort nil
+  "Sort key of the sibling lists: `source', `name', `kind' or `visibility'.")
+
+(defvar-local crate-tree--reverse nil
+  "When non-nil, the table reverses each sibling list.")
+
+(defvar-local crate-tree--rows nil
+  "Rows of the last print, as (ITEM . DEPTH) conses.")
+
+(defvar-local crate-tree--items nil
+  "Hash table from an item path to the item of the last print.")
+
+(defvar-keymap crate-tree-filter-map
+  :doc "Filter keymap for `crate-tree-mode'."
+  "p" #'crate-tree-toggle-public
+  "k" #'crate-tree-kind-filter
+  "f" #'crate-tree-focus
+  "r" #'crate-tree-reset-filters)
+
+(defvar-keymap crate-tree-mode-map
+  :doc "Keymap for `crate-tree-mode'."
+  :parent tabulated-list-mode-map
+  "TAB" #'crate-tree-toggle
+  "<double-mouse-1>" #'crate-tree-mouse-toggle
+  "RET" #'crate-tree-visit
+  "s" #'crate-tree-sort
+  "S" #'crate-tree-reverse-sort
+  "f" crate-tree-filter-map
+  "y" #'crate-tree-copy-path
+  "C-c C-o" #'crate-tree-browse-url)
+
+;; Depth keys: `1' shows the root alone, and `9' shows every depth.
+(dotimes (number 10)
+  (let ((depth number))
+    (define-key crate-tree-mode-map (number-to-string depth)
+      (lambda ()
+        (interactive)
+        (crate-tree-set-depth depth)))))
+
+(define-derived-mode crate-tree-mode tabulated-list-mode "Crate-Tree"
+  "Major mode for the item structure of one Rust crate.
+
+\\{crate-tree-mode-map}
+\\<crate-tree-mode-map>
+\\[crate-tree-toggle] folds or unfolds a row, `1' to `9' set the
+depth, \\[crate-tree-sort] cycles the sibling order, and the `f'
+prefix filters the table.  \\[crate-tree-visit] opens the source of
+a row of a local crate, \\[crate-tree-browse-url] opens its docs.rs
+page, and \\[crate-tree-copy-path] copies its item path."
+  :interactive nil
+  (setq-local crate-tree--folded (make-hash-table :test #'equal))
+  (setq-local crate-tree--kinds crate-tree--default-kinds)
+  (setq-local crate-tree--sort 'source)
+  (setq-local crate-tree--items (make-hash-table :test #'equal))
+  (setq-local tabulated-list-entries nil)
+  (setq-local tabulated-list-padding 1)
+  (setq-local tabulated-list-sort-key nil)
+  (setq-local tabulated-list-format (crate-tree--format nil))
+  (setq-local tabulated-list-printer #'crate-tree--print-entry)
+  (setq-local revert-buffer-function #'crate-tree--revert)
+  (setq-local header-line-format nil)
+  (tabulated-list-init-header)
+  (hl-line-mode 1))
+
+;;; Cells
+
+(defun crate-tree--state ()
+  "Return the row state of the current buffer."
+  (list :folded crate-tree--folded
+        :kinds crate-tree--kinds
+        :public-only crate-tree--public-only
+        :focus crate-tree--focus
+        :max-depth crate-tree--max-depth
+        :sort crate-tree--sort
+        :reverse crate-tree--reverse))
+
+(defun crate-tree--text-width (text)
+  "Return the display width of TEXT."
+  (string-width (substring-no-properties (or text ""))))
+
+(defun crate-tree--folded-p (item)
+  "Return non-nil when ITEM is folded."
+  (and crate-tree--folded (gethash (crate-tree-item-path item)
+                                   crate-tree--folded)))
+
+(defun crate-tree--kind-cell (item)
+  "Return the kind cell of ITEM."
+  (propertize (crate-tree-item-kind-word item) 'face 'crate-tree-kind))
+
+(defun crate-tree--name-cell (item depth)
+  "Return the name cell of ITEM at DEPTH."
+  (let* ((children (length (crate-tree-item-children item)))
+         (folded (crate-tree--folded-p item))
+         (glyph (cond ((zerop children) "  ")
+                      (folded (propertize "▸ " 'face 'crate-tree-fold-marker))
+                      (t (propertize "▾ " 'face 'crate-tree-fold-marker)))))
+    (concat (make-string (* 2 depth) ?\s)
+            (when (and children folded)
+              (propertize glyph
+                          'keymap (let ((map (make-sparse-keymap)))
+                                    (define-key map [mouse-1]
+                                                #'crate-tree-mouse-toggle)
+                                    map)
+                          'mouse-face 'highlight
+                          'help-echo "mouse-1: unfold"))
+            (unless (and children folded) glyph)
+            (propertize (or (crate-tree-item-name item) "")
+                        'face (if (eq (crate-tree-item-kind item) 'module)
+                                  'crate-tree-module-name
+                                'default))
+            (if (and children folded)
+                (propertize (format " (%d)" children)
+                            'face 'crate-tree-count)
+              ""))))
+
+(defun crate-tree--visibility-cell (item)
+  "Return the visibility cell of ITEM."
+  (propertize (crate-tree-item-vis-word item)
+              'face 'crate-tree-visibility))
+
+(defun crate-tree--location-cell (item)
+  "Return the location cell of ITEM."
+  (if-let* ((span (crate-tree-item-span item)))
+      (propertize (format "%s:%s"
+                          (file-name-nondirectory (car span))
+                          (cadr span))
+                  'face 'crate-tree-location)
+    ""))
+
+(defun crate-tree--docs-cell (item)
+  "Return the doc summary cell of ITEM."
+  (propertize (or (crate-tree-item-docs item) "")
+              'face 'crate-tree-docs))
+
+(defun crate-tree--entry (row)
+  "Return the `tabulated-list' entry for ROW."
+  (let ((item (car row))
+        (depth (cdr row)))
+    (list (crate-tree-item-path item)
+          (vector (crate-tree--kind-cell item)
+                  (crate-tree--name-cell item depth)
+                  (crate-tree--visibility-cell item)
+                  (crate-tree--location-cell item)
+                  (crate-tree--docs-cell item)))))
+
+(defun crate-tree--print-entry (id columns)
+  "Print one table row for ID and COLUMNS, then add its help text."
+  (let ((beg (point)))
+    (tabulated-list-print-entry id columns)
+    (when-let* ((item (and id (gethash id crate-tree--items))))
+      (add-text-properties
+       beg (1- (point))
+       (list 'help-echo
+             (concat (crate-tree-item-path item)
+                     (if-let* ((docs (crate-tree-item-docs item)))
+                         (concat "\n" docs)
+                       "")))))))
+
+;;; Column widths
+
+(defun crate-tree--column-width (rows function minimum)
+  "Return the width of a column of ROWS, computed by FUNCTION.
+MINIMUM wins over a shorter content."
+  (let ((width minimum))
+    (dolist (row rows)
+      (setq width (max width
+                       (crate-tree--text-width (funcall function row)))))
+    width))
+
+(defun crate-tree--name-column-width (rows)
+  "Return the width of the name column for ROWS."
+  (crate-tree--column-width
+   rows (lambda (row) (crate-tree--name-cell (car row) (cdr row))) 20))
+
+(defun crate-tree--window-width ()
+  "Return the width of the window that shows the table."
+  (window-width (or (get-buffer-window (current-buffer))
+                    (selected-window))))
+
+(defun crate-tree--format (rows)
+  "Return `tabulated-list-format' for ROWS.
+The Kind, Vis and Location columns size to their content, the Name
+column takes the longest visible name within the window, and the
+Docs column takes the rest."
+  (let* ((kind (crate-tree--column-width
+                rows (lambda (row) (crate-tree--kind-cell (car row))) 8))
+         (vis (crate-tree--column-width
+               rows (lambda (row) (crate-tree--visibility-cell (car row))) 3))
+         (location (min 24 (crate-tree--column-width
+                            rows (lambda (row)
+                                   (crate-tree--location-cell (car row)))
+                            7)))
+         (fixed (+ kind vis location 4))
+         (name (max 20
+                    (min (crate-tree--name-column-width rows)
+                         (- (crate-tree--window-width) fixed)))))
+    (vector (list "Kind" kind nil)
+            (list "Name" name nil)
+            (list "Vis" vis nil)
+            (list "Location" location nil)
+            (list "Docs" 0 nil))))
+
+;;; Rendering
+
+(defun crate-tree--header-line (rows)
+  "Return the header line of the table for ROWS."
+  (concat
+   (propertize (or crate-tree--name "Crate tree") 'face 'bold)
+   (format "  ·  %d rows" (length rows))
+   (if crate-tree--public-only "  ·  public only" "")
+   (if crate-tree--focus (format "  ·  focus: %s" crate-tree--focus) "")
+   (unless (equal crate-tree--sort 'source)
+     (format "  ·  sorted by %s%s" crate-tree--sort
+             (if crate-tree--reverse " (reversed)" "")))))
+
+(defun crate-tree--fill-items (rows)
+  "Store the items of ROWS in `crate-tree--items'."
+  (setq crate-tree--items (make-hash-table :test #'equal))
+  (dolist (row rows)
+    (puthash (crate-tree-item-path (car row)) (car row)
+             crate-tree--items)))
+
+(defun crate-tree--reprint ()
+  "Print the table from the state of the current buffer."
+  (let* ((rows (if crate-tree--root
+                   (crate-tree--rows crate-tree--root (crate-tree--state))))
+         (entries (mapcar #'crate-tree--entry rows)))
+    (setq-local crate-tree--rows rows)
+    (crate-tree--fill-items rows)
+    (setq-local tabulated-list-format (crate-tree--format rows))
+    (tabulated-list-init-header)
+    (setq-local tabulated-list-entries entries)
+    (setq-local header-line-format (crate-tree--header-line rows))
+    (tabulated-list-print t)
+    (when (null rows)
+      (let ((inhibit-read-only t))
+        (insert (propertize "No rustdoc JSON yet." 'face 'shadow) "\n")))))
+
+(defun crate-tree--revert (&rest _ignored)
+  "Reprint the table."
+  (crate-tree--reprint))
+
+;;; Row commands
+
+(defun crate-tree--item-at-point ()
+  "Return the item of the row at point, or nil."
+  (when-let* ((id (tabulated-list-get-id)))
+    (gethash id crate-tree--items)))
+
+(defun crate-tree-toggle ()
+  "Fold or unfold the row at point."
+  (interactive)
+  (let ((item (crate-tree--item-at-point)))
+    (unless item
+      (user-error "No item at point"))
+    (unless (crate-tree-item-children item)
+      (user-error "%s has no children" (crate-tree-item-name item)))
+    (let ((path (crate-tree-item-path item)))
+      (if (gethash path crate-tree--folded)
+          (remhash path crate-tree--folded)
+        (puthash path t crate-tree--folded)))
+    (crate-tree--reprint)))
+
+(defun crate-tree-mouse-toggle (event)
+  "Fold or unfold the row that EVENT names."
+  (interactive "e")
+  (mouse-set-point event)
+  (crate-tree-toggle))
+
+(defun crate-tree-set-depth (depth)
+  "Show every row below DEPTH.
+DEPTH 1 shows the crate row alone, and DEPTH 9 shows everything."
+  (interactive "nDepth: ")
+  (setq-local crate-tree--max-depth
+              (if (or (null depth) (>= depth 9)) nil (1- depth)))
+  (crate-tree--reprint))
+
+(defun crate-tree-sort ()
+  "Sort the sibling lists by the next key."
+  (interactive)
+  (setq-local crate-tree--sort
+              (pcase crate-tree--sort
+                ('source 'name)
+                ('name 'kind)
+                ('kind 'visibility)
+                (_ 'source)))
+  (crate-tree--reprint)
+  (message "Sorted by %s" crate-tree--sort))
+
+(defun crate-tree-reverse-sort ()
+  "Reverse the sibling lists."
+  (interactive)
+  (setq-local crate-tree--reverse (not crate-tree--reverse))
+  (crate-tree--reprint)
+  (message "Sibling order %s" (if crate-tree--reverse "reversed" "forward")))
+
+(defun crate-tree-toggle-public ()
+  "Show only public items, or every item."
+  (interactive)
+  (setq-local crate-tree--public-only (not crate-tree--public-only))
+  (crate-tree--reprint)
+  (message "Public items %s"
+           (if crate-tree--public-only "only" "and private items")))
+
+(defun crate-tree-kind-filter (kinds)
+  "Show only the item KINDS that the user names.
+KINDS is a list of kind symbols.  An empty list shows the crate row
+alone."
+  (interactive
+   (list (mapcar #'intern
+                 (completing-read-multiple
+                  "Kinds (empty for none): "
+                  (mapcar #'symbol-name crate-tree--all-kinds) nil t
+                  (mapconcat #'symbol-name crate-tree--kinds ",")))))
+  (setq-local crate-tree--kinds kinds)
+  (crate-tree--reprint))
+
+(defun crate-tree-focus (regexp)
+  "Keep the subtree that REGEXP matches, or every row for an empty REGEXP."
+  (interactive (list (read-string "Focus on item path (empty for all): ")))
+  (setq-local crate-tree--focus
+              (let ((trimmed (string-trim regexp)))
+                (unless (string-empty-p trimmed) trimmed)))
+  (crate-tree--reprint))
+
+(defun crate-tree-reset-filters ()
+  "Drop every filter and sort of the table."
+  (interactive)
+  (setq-local crate-tree--kinds crate-tree--default-kinds)
+  (setq-local crate-tree--public-only nil)
+  (setq-local crate-tree--focus nil)
+  (setq-local crate-tree--max-depth nil)
+  (setq-local crate-tree--sort 'source)
+  (setq-local crate-tree--reverse nil)
+  (crate-tree--reprint))
+
+(defun crate-tree-copy-path ()
+  "Copy the item path of the row at point."
+  (interactive)
+  (let ((path (tabulated-list-get-id)))
+    (unless path
+      (user-error "No item at point"))
+    (kill-new path)
+    (message "Copied %s" path)))
+
+(defun crate-tree--docs-url (path)
+  "Return the docs.rs URL of item PATH."
+  (when crate-tree--name
+    (let ((item (string-remove-prefix (concat crate-tree--name "::") path)))
+      (format "https://docs.rs/%s/latest/%s/%s"
+              crate-tree--name crate-tree--name
+              (string-replace "::" "/" item)))))
+
+(defun crate-tree-browse-url ()
+  "Open the docs.rs page of the row at point."
+  (interactive)
+  (let ((path (tabulated-list-get-id)))
+    (unless path
+      (user-error "No item at point"))
+    (browse-url (crate-tree--docs-url path))))
+
+(defun crate-tree-visit ()
+  "Open the source of the row at point.
+A crate that came from the database carries no source on disk, so
+this command signals a `user-error' there."
+  (interactive)
+  (let ((item (crate-tree--item-at-point)))
+    (unless item
+      (user-error "No item at point"))
+    (unless crate-tree--directory
+      (user-error "No source for this crate"))
+    (let ((span (crate-tree-item-span item)))
+      (unless span
+        (user-error "%s carries no span" (crate-tree-item-name item)))
+      (find-file (expand-file-name (car span) crate-tree--directory))
+      (goto-char (point-min))
+      (forward-line (1- (cadr span))))))
 
 (provide 'crate-tree)
 
