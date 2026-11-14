@@ -559,6 +559,26 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
                             (buffer-substring-no-properties
                              (point-min) (point-max))))))
 
+(ert-deftest crate-tree-mode-names-a-running-build ()
+  "A build that still runs says so in place of the rows."
+  (with-temp-buffer
+    (crate-tree-mode)
+    (setq crate-tree--status 'running)
+    (crate-tree--reprint)
+    (should (string-match-p "build in progress"
+                            (buffer-substring-no-properties
+                             (point-min) (point-max))))))
+
+(ert-deftest crate-tree-mode-names-the-reason-of-a-failure ()
+  "A table without rows names why the build failed."
+  (with-temp-buffer
+    (crate-tree-mode)
+    (setq crate-tree--status "cargo `cargo' is not on `executable-find'")
+    (crate-tree--reprint)
+    (should (string-match-p "No rustdoc JSON: cargo"
+                            (buffer-substring-no-properties
+                             (point-min) (point-max))))))
+
 
 ;;; Local rustdoc builds
 
@@ -621,14 +641,68 @@ library."
       (delete-directory directory t))))
 
 (ert-deftest crate-tree-start-build-without-cargo ()
-  "A missing cargo caches the failure."
+  "A missing cargo caches the failure and its reason."
   (crate-test--with-local-crate dir
     (let ((crate-tree--json-cache (make-hash-table :test #'equal))
+          (crate-tree--reason (make-hash-table :test #'equal))
           (crate-cargo-program nil))
-      (should-not (crate-tree--start-local-build dir (current-buffer)))
-      (should (eq (gethash (crate-tree--json-cache-key dir)
-                           crate-tree--json-cache)
-                  :failed)))))
+      (with-temp-buffer
+        (crate-tree-mode)
+        (should-not (crate-tree--start-local-build dir (current-buffer)))
+        (should (eq (gethash (crate-tree--json-cache-key dir)
+                             crate-tree--json-cache)
+                    :failed))
+        (should (string-match-p "crate-cargo-program"
+                                (gethash (crate-tree--json-cache-key dir)
+                                         crate-tree--reason)))
+        (should (string-match-p "crate-cargo-program" crate-tree--status))
+        (crate-tree--reprint)
+        (should (string-match-p "crate-cargo-program"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max))))))))
+
+(ert-deftest crate-tree-start-build-names-a-missing-cargo-program ()
+  "A cargo name that resolves to nothing names that name."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree--json-cache (make-hash-table :test #'equal))
+          (crate-cargo-program "/no/such/cargo"))
+      (with-temp-buffer
+        (crate-tree-mode)
+        (should-not (crate-tree--start-local-build dir (current-buffer)))
+        (should (string-match-p "no/such/cargo" crate-tree--status))))))
+
+(ert-deftest crate-tree-start-build-without-library-target ()
+  "A package without a library target names that fact."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (crate-local--manifest dir))
+           (metadata (crate-tree-test--metadata
+                      manifest (expand-file-name "target" dir)))
+           (package (aref (gethash "packages" metadata) 0))
+           (target (aref (gethash "targets" package) 0))
+           (crate-tree--json-cache (make-hash-table :test #'equal))
+           (crate-cargo-program "/mock/cargo"))
+      (puthash "kind" ["bin"] target)
+      (cl-letf (((symbol-function 'executable-find) (lambda (_program) "/mock/cargo"))
+                ((symbol-function 'crate-local--metadata)
+                 (lambda (_dir) metadata)))
+        (with-temp-buffer
+          (crate-tree-mode)
+          (should-not (crate-tree--start-local-build dir (current-buffer)))
+          (should (string-match-p "no library target" crate-tree--status))
+          (should (string-match-p "no library target"
+                                  (crate-tree--status-message))))))))
+
+(ert-deftest crate-tree-json-failed-sentinel-names-its-reason ()
+  "A cached failure leaves its reason for the table."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree--json-cache (make-hash-table :test #'equal))
+          (crate-tree--reason (make-hash-table :test #'equal))
+          (key (crate-tree--json-cache-key dir)))
+      (puthash key :failed crate-tree--json-cache)
+      (puthash key "a reason" crate-tree--reason)
+      (with-temp-buffer
+        (should-not (crate-tree--json dir))
+        (should (equal crate-tree--status "a reason"))))))
 
 (ert-deftest crate-tree-read-json ()
   "The reader parses a rustdoc document and survives a broken file."

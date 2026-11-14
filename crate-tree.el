@@ -694,6 +694,16 @@ retries it.  `crate-tree--refresh' drops the entry before a rebuild.")
 (defvar crate-tree--in-flight (make-hash-table :test #'equal)
   "Running rustdoc builds keyed by crate manifest.")
 
+(defvar crate-tree--reason (make-hash-table :test #'equal)
+  "Reason that a crate has no rustdoc JSON, keyed like the JSON cache.
+A reader without a row must learn what to fix, so every failed start
+and every failed build stores its reason here.")
+
+(defvar-local crate-tree--status nil
+  "Rustdoc build status of this table buffer.
+nil means that no build ran, `running' a build that still runs, and
+a string the reason that the crate has no rustdoc JSON.")
+
 (defun crate-tree--json-cache-key (directory)
   "Return the cache key of the crate in DIRECTORY."
   (list 'tree (crate-local--manifest directory)))
@@ -739,10 +749,76 @@ RUSTC_BOOTSTRAP lifts that gate."
                       (rustc (executable-find program)))
             (list (concat "RUSTC=" rustc)))))
 
+(defun crate-tree--set-status (buffer status)
+  "Set the rustdoc build status of BUFFER to STATUS."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq crate-tree--status status))))
+
+(defun crate-tree--no-cargo-reason ()
+  "Return the reason that no cargo command answers."
+  (declare (side-effect-free t))
+  (if crate-cargo-program
+      (format "cargo `%s' is not on `executable-find'" crate-cargo-program)
+    "`crate-cargo-program' is nil"))
+
+(defun crate-tree--build-failed (buffer key reason)
+  "Mark BUFFER, the tree of KEY, with the REASON of a failed start.
+The JSON cache holds `:failed' for KEY, so a reprint never retries
+the build, and BUFFER names the reason in place of the rows."
+  (puthash key :failed crate-tree--json-cache)
+  (puthash key reason crate-tree--reason)
+  (crate-tree--set-status buffer reason)
+  nil)
+
+(defun crate-tree--failure-line (out)
+  "Return the last line of OUT, the buffer of a `cargo doc' run."
+  (with-current-buffer out
+    (goto-char (point-max))
+    (let (line)
+      (while (and (not line) (not (bobp)))
+        (forward-line -1)
+        (let ((text (string-trim (buffer-substring (point) (line-end-position)))))
+          (when (not (string-empty-p text))
+            (setq line text))))
+      line)))
+
+(defun crate-tree--finish-build (process out buffer key manifest json-file)
+  "Record the result of the build that PROCESS ran.
+OUT holds its output, BUFFER the tree, and KEY, MANIFEST and
+JSON-FILE say where the cache entry, the build and the JSON live.
+A failed build keeps OUT as `*crate-tree-build*' and names its last
+line in BUFFER, in place of the rows."
+  (let* ((exited (eq 0 (process-exit-status process)))
+         (json (and exited (crate-tree--read-json json-file)))
+         (reason (unless json
+                   (if exited
+                       "`cargo doc' wrote no rustdoc JSON"
+                     (or (crate-tree--failure-line out)
+                         "`cargo doc' exited with an error")))))
+    (remhash manifest crate-tree--in-flight)
+    (puthash key (or json :failed) crate-tree--json-cache)
+    (if reason
+        (puthash key reason crate-tree--reason)
+      (remhash key crate-tree--reason))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (derived-mode-p 'crate-tree-mode)
+          (setq crate-tree--status reason)
+          (crate-tree--apply-json (or json :failed))
+          (when reason
+            (message "crate-tree: %s" reason)))))
+    (when (buffer-live-p out)
+      (if reason
+          (with-current-buffer out
+            (rename-buffer "*crate-tree-build*" t))
+        (kill-buffer out)))))
+
 (defun crate-tree--start-local-build (directory buffer)
   "Document the crate in DIRECTORY, then reprint BUFFER.
 Return non-nil when a build runs, nil when no cargo, no manifest or
-no library target answers.  The failed start caches `:failed'."
+no library target answers.  The failed start caches `:failed' and
+its reason, so the table can name the fix."
   (let* ((manifest (crate-local--manifest directory))
          (key (crate-tree--json-cache-key directory))
          (program (and crate-cargo-program
@@ -751,10 +827,15 @@ no library target answers.  The failed start caches `:failed'."
          (json-file (and metadata (crate-tree--json-file metadata manifest))))
     (cond
      ((gethash manifest crate-tree--in-flight)
+      (crate-tree--set-status buffer 'running)
       t)
-     ((or (null program) (null json-file))
-      (puthash key :failed crate-tree--json-cache)
-      nil)
+     ((null program)
+      (crate-tree--build-failed buffer key (crate-tree--no-cargo-reason)))
+     ((null metadata)
+      (crate-tree--build-failed
+       buffer key "`cargo metadata' cannot read the manifest"))
+     ((null json-file)
+      (crate-tree--build-failed buffer key "the package has no library target"))
      (t
       (let ((out (generate-new-buffer " *crate-tree-build*"))
             (doc (file-name-nondirectory
@@ -777,30 +858,15 @@ no library target answers.  The failed start caches `:failed'."
                  :sentinel
                  (lambda (process _event)
                    (when (memq (process-status process) '(exit signal))
-                     (unwind-protect
-                         (let ((json (when (eq 0 (process-exit-status process))
-                                       (crate-tree--read-json json-file))))
-                           (remhash manifest crate-tree--in-flight)
-                           (puthash key (or json :failed) crate-tree--json-cache)
-                           (when (buffer-live-p buffer)
-                             (with-current-buffer buffer
-                               (when (derived-mode-p 'crate-tree-mode)
-                                 (crate-tree--apply-json
-                                  (if json
-                                      json
-                                    (gethash key crate-tree--json-cache)))
-                                 (unless json
-                                   (message "crate-tree: rustdoc build failed for %s"
-                                            doc))))))
-                       (when (buffer-live-p out)
-                         (kill-buffer out)))))))
+                     (crate-tree--finish-build process out buffer key
+                                               manifest json-file)))))
               (puthash manifest t crate-tree--in-flight)
+              (crate-tree--set-status buffer 'running)
               t)
           (error
            (when (buffer-live-p out)
              (kill-buffer out))
-           (puthash key :failed crate-tree--json-cache)
-           nil)))))))
+           (crate-tree--build-failed buffer key "the build cannot start"))))))))
 
 (defun crate-tree--json (directory)
   "Return the rustdoc JSON of the crate in DIRECTORY, or nil.
@@ -811,21 +877,27 @@ asks, and that buffer reprints when the build ends."
     (let* ((key (crate-tree--json-cache-key directory))
            (cached (gethash key crate-tree--json-cache)))
       (cond
-       ((eq cached :failed) nil)
+       ((eq cached :failed)
+        (setq crate-tree--status (gethash key crate-tree--reason))
+        nil)
        (cached cached)
        (t
         (crate-tree--start-local-build directory (current-buffer))
         nil)))))
 
 (defun crate-tree--forget-local (directory)
-  "Drop the cached JSON of the crate in DIRECTORY."
-  (remhash (crate-tree--json-cache-key directory) crate-tree--json-cache))
+  "Drop the cached JSON and the cached reason of the crate in DIRECTORY."
+  (let ((key (crate-tree--json-cache-key directory)))
+    (remhash key crate-tree--json-cache)
+    (remhash key crate-tree--reason)))
 
 (defun crate-tree--apply-json (json)
   "Store JSON as the tree of the buffer and print it.
-A `:failed' sentinel or nil leaves the old tree in place."
-  (unless (or (null json) (eq json :failed))
-    (setq crate-tree--root (crate-tree--items json)))
+A `:failed' sentinel or nil leaves the old tree and its status in
+place, so the table keeps naming why it holds no row."
+  (when (and json (not (eq json :failed)))
+    (setq crate-tree--root (crate-tree--items json)
+          crate-tree--status nil))
   (crate-tree--reprint))
 
 (defun crate-tree--refresh (&rest _ignored)
@@ -840,7 +912,7 @@ A local crate runs `cargo doc' again, and a database crate asks
          (crate-tree--json crate-tree--directory)))
     (crate-tree--apply-json (crate-doc--json crate-tree--name)))
   (when (null crate-tree--root)
-    (message "crate-tree: no rustdoc JSON yet")))
+    (message "crate-tree: %s" (crate-tree--status-message))))
 
 ;;; Cells
 
@@ -1010,6 +1082,16 @@ Docs column takes the rest."
       (beginning-of-line)
       t)))
 
+(defun crate-tree--status-message ()
+  "Return the line that a table without rows shows."
+  (declare (side-effect-free t))
+  (cond
+   ((eq crate-tree--status 'running)
+    "Rustdoc build in progress…")
+   ((stringp crate-tree--status)
+    (concat "No rustdoc JSON: " crate-tree--status))
+   (t "No rustdoc JSON yet.")))
+
 (defun crate-tree--reprint ()
   "Print the table from the state of the current buffer."
   (let* ((rows (if crate-tree--root
@@ -1027,7 +1109,7 @@ Docs column takes the rest."
         (setq crate-tree--pending-row nil)))
     (when (null rows)
       (let ((inhibit-read-only t))
-        (insert (propertize "No rustdoc JSON yet." 'face 'shadow) "\n")))))
+        (insert (propertize (crate-tree--status-message) 'face 'shadow) "\n")))))
 
 (defun crate-tree--revert (&rest _ignored)
   "Rebuild the rustdoc JSON of the buffer source, then reprint."

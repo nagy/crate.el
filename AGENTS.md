@@ -179,6 +179,16 @@ nothing.
 `crate-tree--json` caches the parsed document under
 `(tree MANIFEST)` with a `:failed` sentinel, and `crate-tree--refresh`
 drops the entry before a rebuild, so `g` reads the source as it stands.
+
+**A table without rows names the reason.**  Every failed start
+(no cargo, unreadable metadata, no library target) and every failed
+build stores its reason in `crate-tree--reason`, keyed like this
+cache, and copies it into the buffer-local `crate-tree--status`, so
+`crate-tree--status-message` replaces the bare "No rustdoc JSON"
+line with the fix.  A failed build keeps its output buffer as
+`*crate-tree-build*` and shows the last line of `cargo doc` there.
+A `running` status reads "build in progress".
+
 The Nix build substitutes both the cargo and the rustc store paths
 into the defcustom defaults.
 
