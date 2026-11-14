@@ -758,7 +758,7 @@ survives the `or' of `with-memoization'."
   :group 'crate)
 
 (defface crate-version
-  '((t :inherit (shadow)))
+  '((t :inherit (magit-tag shadow)))
   "Face for versions."
   :group 'crate)
 
