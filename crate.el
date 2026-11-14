@@ -511,64 +511,111 @@ crate-doc.nix fetches."
   :type 'boolean
   :group 'crate)
 
+(defcustom crate-doc-nix-file nil
+  "Path of the companion `crate-doc.nix' file.
+nil means to look next to `crate.el' and in its `nix' directory.
+The Nix package writes the store path of the file here, because the
+installed package holds the Emacs Lisp files alone."
+  :type '(choice (const :tag "Look next to crate.el" nil) file)
+  :group 'crate)
+
 (defvar crate-doc--cache (make-hash-table :test #'equal)
   "Cache mapping (crate name, database path) keys to parsed rustdoc JSON.
 Memoized — cleared by `crate-refresh-cache'.")
 
+(defvar crate-doc--status (make-hash-table :test #'equal)
+  "Rustdoc build status keyed like `crate-doc--cache'.
+`running' names a build that still runs and a string names the
+reason that the crate has no rustdoc JSON.  A reader without a
+module tree must learn what to fix, so every failed start stores a
+reason here.")
+
+(defun crate-doc--set-status (name status)
+  "Set the rustdoc build status of crate NAME to STATUS.
+A nil STATUS drops the entry."
+  (if status
+      (puthash (list name crate-data-path) status crate-doc--status)
+    (remhash (list name crate-data-path) crate-doc--status)))
+
+(defun crate-doc--status-of (name)
+  "Return the rustdoc build status of crate NAME.
+The answer is `running', a reason string, or nil when no build ran."
+  (declare (side-effect-free t))
+  (gethash (list name crate-data-path) crate-doc--status))
+
+(defun crate-doc--unavailable-reason ()
+  "Return the reason that no rustdoc build starts."
+  (if (crate-doc--nix-path)
+      "`nix-build' is not on `executable-find'"
+    "`crate-doc.nix' is not next to `crate.el'"))
+
 (defun crate-doc--nix-path ()
   "Return the path of the companion crate-doc.nix file, or nil."
-  (when-let* ((lib (locate-library "crate"))
-              (dir (file-name-directory lib)))
-    (seq-find #'file-exists-p
-              (list (expand-file-name "crate-doc.nix" dir)
-                    (expand-file-name "nix/crate-doc.nix" dir)))))
+  (or (and crate-doc-nix-file
+           (file-readable-p crate-doc-nix-file)
+           crate-doc-nix-file)
+      (when-let* ((lib (locate-library "crate"))
+                  (dir (file-name-directory lib)))
+        (seq-find #'file-exists-p
+                  (list (expand-file-name "crate-doc.nix" dir)
+                        (expand-file-name "nix/crate-doc.nix" dir))))))
 
 (defvar crate-doc--in-flight (make-hash-table :test #'equal)
   "In-flight async doc builds keyed by crate name.")
 
+(defvar crate-doc--waiters (make-hash-table :test #'equal)
+  "Buffers that wait for the rustdoc build of a crate, keyed by name.
+One build serves every buffer that shows the crate, and a buffer
+joins the list when it asks mid-build, so a detail buffer must not
+starve the tree of the same crate.")
+
+(defun crate-doc--add-waiter (name buffer)
+  "Wait for the build of crate NAME in BUFFER."
+  (puthash name
+           (cons buffer (delete buffer (gethash name crate-doc--waiters)))
+           crate-doc--waiters))
+
 (defvar crate-doc--render-function nil
   "Function that re-renders the buffer of a finished rustdoc build.
-A buffer that starts a build sets this buffer-locally.  nil means
-`crate--render', the detail buffer.")
+A tree buffer sets this buffer-locally.  nil means `crate--render',
+the detail buffer.")
 
 (defvar crate-doc--generation 0
   "Generation counter for async doc builds.
 Bumped by `crate-refresh-cache'; results from older generations
 are discarded.")
 
-(defun crate-doc--json-from-build (out)
-  "Parse the rustdoc JSON from `nix-build' output buffer OUT, or nil."
+(defun crate-doc--json-from-build (out name)
+  "Parse from `nix-build' output buffer OUT the rustdoc JSON of crate NAME.
+The build documents the driver crate and every dependency of NAME,
+so the document of NAME is the file that its canonical name names."
   (with-current-buffer out
     (goto-char (point-max))
     (forward-line -1)
     (let ((path (string-trim (buffer-substring (point) (point-max)))))
       (when (and path (not (string-empty-p path)) (file-exists-p path))
-        (let ((doc-dir (expand-file-name "share/doc" path)))
-          (when (file-directory-p doc-dir)
-            (let ((json-file
-                   ;; Pick the crate's JSON (non-driver).
-                   (car (cl-remove-if
-                         (lambda (f)
-                           (or (string-match-p "/crate_doc_driver\\.json$" f)
-                               (not (string-suffix-p ".json" f))))
-                         (directory-files-recursively doc-dir "")))))
-              (when json-file
-                (with-temp-buffer
-                  (insert-file-contents json-file)
-                  (goto-char (point-min))
-                  (condition-case nil
-                      (json-parse-buffer)
-                    (error nil)))))))))))
+        (let ((json-file (expand-file-name
+                          (concat (crate--canonical-name name) ".json")
+                          (expand-file-name "share/doc" path))))
+          (when (file-readable-p json-file)
+            (with-temp-buffer
+              (insert-file-contents json-file)
+              (goto-char (point-min))
+              (condition-case nil
+                  (json-parse-buffer)
+                (error nil)))))))))
 
-(defun crate-doc--start-build (name buffer)
-  "Start an async rustdoc build for crate NAME, re-rendering BUFFER.
+(defun crate-doc--start-build (name)
+  "Start an async rustdoc build for crate NAME.
 Returns non-nil when a build is running, nil when unavailable: a
 missing `nix-build', a missing crate-doc.nix or a spawn failure
-caches the `:failed' sentinel, so the buffer shows no module tree
-and no error."
+caches the `:failed' sentinel, and the status names the reason, so
+the buffer shows no module tree and explains the fix."
   (cond
    ;; Reuse the running build instead of spawning a second one.
-   ((gethash name crate-doc--in-flight) t)
+   ((gethash name crate-doc--in-flight)
+    (crate-doc--set-status name 'running)
+    t)
    ((when-let* ((nix-path (crate-doc--nix-path))
                 ((executable-find "nix-build")))
       (let ((gen crate-doc--generation)
@@ -586,49 +633,80 @@ and no error."
                (lambda (proc _event)
                  (when (memq (process-status proc) '(exit signal))
                    (unwind-protect
-                       (let ((json (and (eq 0 (process-exit-status proc))
-                                        (crate-doc--json-from-build out))))
+                       (let* ((exited (eq 0 (process-exit-status proc)))
+                              (json (and exited
+                                         (crate-doc--json-from-build out name)))
+                              (reason (unless json
+                                        (if exited
+                                            "`nix-build' wrote no rustdoc JSON"
+                                          "`nix-build' exited with an error"))))
                          (remhash name crate-doc--in-flight)
                          ;; Discard stale results (e.g. cache refresh
                          ;; mid-build) — the generation moved on.
                          (when (= gen crate-doc--generation)
                            (puthash (list name path) (or json :failed)
                                     crate-doc--cache)
-                           (when (buffer-live-p buffer)
-                             (with-current-buffer buffer
-                               (funcall (or crate-doc--render-function
-                                            #'crate--render))))
-                           (unless json
+                           (let ((crate-data-path path))
+                             (crate-doc--set-status name reason))
+                           ;; One build serves every buffer that shows
+                           ;; the crate, and each names its own renderer.
+                           (dolist (waiter (gethash name crate-doc--waiters))
+                             (when (buffer-live-p waiter)
+                               (with-current-buffer waiter
+                                 (funcall (or crate-doc--render-function
+                                              #'crate--render)))))
+                           (remhash name crate-doc--waiters)
+                           (when reason
                              (message "crate: rustdoc build failed for %s"
                                       name))))
                      (when (buffer-live-p out)
                        (kill-buffer out))))))
               (puthash name t crate-doc--in-flight)
+              (crate-doc--set-status name 'running)
               t)
           (error
            ;; Spawn failure: degrade like missing Nix.
            (when (buffer-live-p out)
              (kill-buffer out))
            (puthash (list name path) :failed crate-doc--cache)
+           (crate-doc--set-status name "the build cannot start")
+           (remhash name crate-doc--waiters)
            nil)))))
    (t
-    ;; Missing nix-build or crate-doc.nix: cache the negative so
-    ;; renders don't re-probe; `crate-refresh-cache' clears it.
+    ;; Missing nix-build or crate-doc.nix: cache the negative and its
+    ;; reason so renders don't re-probe; `crate-refresh-cache' clears
+    ;; both.
+    (crate-doc--set-status name (crate-doc--unavailable-reason))
     (puthash (list name crate-data-path) :failed crate-doc--cache)
+    (remhash name crate-doc--waiters)
     nil)))
 
 (defun crate-doc--json (name)
   "Return the parsed rustdoc JSON for crate NAME, or nil.
 A first call starts an async build and answers nil.  The build
-re-renders the crate buffer when it completes."
-  (when (and crate-doc-enable (crate--crate name))
+re-renders every buffer that waits for it when it completes.  A nil
+answer leaves the reason in `crate-doc--status-of' for the caller to
+show."
+  (cond
+   ((not crate-doc-enable)
+    (crate-doc--set-status name "`crate-doc-enable' is nil")
+    nil)
+   ((not (crate--crate name)) nil)
+   (t
     (let ((cached (gethash (list name crate-data-path) crate-doc--cache)))
       (cond
        ((eq cached :failed) nil)
        (cached cached)
        (t
-        (crate-doc--start-build name (current-buffer))
-        nil)))))
+        (crate-doc--add-waiter name (current-buffer))
+        (crate-doc--start-build name)
+        nil))))))
+
+(defun crate-doc--forget (name)
+  "Drop the cached rustdoc JSON and status of crate NAME."
+  (let ((key (list name crate-data-path)))
+    (remhash key crate-doc--cache)
+    (remhash key crate-doc--status)))
 
 (defun crate-doc--module-tree (json)
   "Return the module tree from rustdoc JSON.
@@ -1154,7 +1232,10 @@ build feeds it yet."
            (json
             (crate-insert-module-items tree 0 ""))
            (failed
-            (insert "(rustdoc unavailable)\n"))
+            (let ((reason (crate-doc--status-of crate-name)))
+              (insert (if reason
+                          (format "(rustdoc unavailable: %s)\n" reason)
+                        "(rustdoc unavailable)\n"))))
            (building
             (insert "(rustdoc build in progress…)\n"))))))))
 
@@ -1349,6 +1430,8 @@ ACTION."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
         crate-doc--cache (make-hash-table :test 'equal)
+        crate-doc--status (make-hash-table :test 'equal)
+        crate-doc--waiters (make-hash-table :test 'equal)
         crate-doc--in-flight (make-hash-table :test 'equal))
   ;; Discard results of builds started before the refresh.
   (cl-incf crate-doc--generation)

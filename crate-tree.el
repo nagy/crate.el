@@ -659,12 +659,12 @@ so a second call only displays it."
           (crate-tree--apply-json (crate-tree--json directory))
         (setq-local crate-doc--render-function
                     #'crate-tree--render-from-build)
-        (crate-tree--apply-json (crate-doc--json name))))
+        (crate-tree--apply-doc name)))
     (current-buffer)))
 
 (defun crate-tree--render-from-build ()
   "Reprint the tree from a finished Nix rustdoc build."
-  (crate-tree--apply-json (crate-doc--json crate-tree--name)))
+  (crate-tree--apply-doc crate-tree--name))
 
 (defun crate-tree-copy-dependency ()
   "Copy a Cargo.toml line for the crate of this table."
@@ -899,17 +899,29 @@ place, so the table keeps naming why it holds no row."
           crate-tree--status nil))
   (crate-tree--reprint))
 
+(defun crate-tree--apply-doc (name)
+  "Load the rustdoc JSON of the database crate NAME and print the table.
+A nil answer leaves the build status in `crate-tree--status', so a
+build that still runs or that cannot start shows in place of the
+rows."
+  (let ((json (crate-doc--json name)))
+    (unless json
+      (setq crate-tree--status (crate-doc--status-of name)))
+    (crate-tree--apply-json json)))
+
 (defun crate-tree--refresh (&rest _ignored)
   "Load the rustdoc JSON of the buffer source, then print it.
-A local crate runs `cargo doc' again, and a database crate asks
-`crate-doc--json', which starts the Nix build on a miss."
+A local crate runs `cargo doc' again, and a database crate drops its
+cached document first, so `g' retries a Nix build that could not
+start."
   (interactive)
   (if crate-tree--directory
       (progn
         (crate-tree--forget-local crate-tree--directory)
         (crate-tree--apply-json
          (crate-tree--json crate-tree--directory)))
-    (crate-tree--apply-json (crate-doc--json crate-tree--name)))
+    (crate-doc--forget crate-tree--name)
+    (crate-tree--apply-doc crate-tree--name))
   (when (null crate-tree--root)
     (message "crate-tree: %s" (crate-tree--status-message))))
 

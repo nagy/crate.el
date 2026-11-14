@@ -2167,10 +2167,66 @@ Published name, canonical form, and versioned URL all open the crate."
               ((symbol-function 'executable-find) (lambda (_) nil))
               ((symbol-function 'make-process)
                (lambda (&rest _) (cl-incf spawns) 'fake-proc)))
-      (should-not (crate-doc--start-build "serde" nil))
+      (should-not (crate-doc--start-build "serde"))
       (should (= spawns 0))
       (should (eq (gethash (list "serde" crate-data-path) crate-doc--cache)
                   :failed)))))
+
+(ert-deftest crate-doc-build-missing-nix-names-the-reason ()
+  "A start without `nix-build' stores the reason for the caller."
+  (let ((crate-doc--cache (make-hash-table :test 'equal))
+        (crate-doc--status (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate-doc--nix-path)
+               (lambda () "/fake/crate-doc.nix"))
+              ((symbol-function 'executable-find) (lambda (_) nil)))
+      (should-not (crate-doc--start-build "serde"))
+      (should (string-match-p "nix-build" (crate-doc--status-of "serde"))))))
+
+(ert-deftest crate-doc-build-missing-nix-file-names-the-reason ()
+  "A start without the companion Nix file names that file."
+  (let ((crate-doc--cache (make-hash-table :test 'equal))
+        (crate-doc--status (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'crate-doc--nix-path) #'ignore)
+              ((symbol-function 'executable-find)
+               (lambda (_) "/usr/bin/nix-build")))
+      (should-not (crate-doc--start-build "serde"))
+      (should (string-match-p "crate-doc\\.nix"
+                              (crate-doc--status-of "serde"))))))
+
+(ert-deftest crate-doc-nix-path-prefers-the-defcustom ()
+  "The packaged build substitutes the store path of `crate-doc.nix'."
+  (let* ((file (make-temp-file "crate-doc-" nil ".nix"))
+         (crate-doc-nix-file file))
+    (unwind-protect
+        (progn
+          (should (equal (crate-doc--nix-path) file))
+          ;; A stale path falls back to the files next to crate.el.
+          (setq crate-doc-nix-file (concat file ".absent"))
+          (should-not (equal (crate-doc--nix-path) crate-doc-nix-file)))
+      (delete-file file))))
+
+(ert-deftest crate-doc-json-from-build-picks-the-named-crate ()
+  "The driver documents every dependency, so NAME picks its own file."
+  (let* ((root (make-temp-file "crate-doc-out-" t))
+         (doc (expand-file-name "share/doc" root))
+         (out (generate-new-buffer " *crate-doc-out*")))
+    (unwind-protect
+        (progn
+          (make-directory doc t)
+          (with-temp-file (expand-file-name "adler2.json" doc)
+            (insert "{\"crate_version\": \"2.0.1\"}"))
+          (with-temp-file (expand-file-name "async_trait.json" doc)
+            (insert "{\"crate_version\": \"0.1.80\"}"))
+          (with-current-buffer out
+            (insert root "\n"))
+          (should (equal (gethash "crate_version"
+                                  (crate-doc--json-from-build
+                                   out "async-trait"))
+                         "0.1.80"))
+          ;; A crate without a document answers nil, never the first file.
+          (should-not (crate-doc--json-from-build out "serde")))
+      (kill-buffer out)
+      (delete-directory root t))))
 
 (ert-deftest crate-doc-build-spawn-error ()
   "When `make-process' signals, the negative caches and no error escapes."
@@ -2182,7 +2238,7 @@ Published name, canonical form, and versioned URL all open the crate."
               ((symbol-function 'make-process)
                (lambda (&rest _)
                  (signal 'file-error '("Searching for program" "nix-build")))))
-      (should-not (crate-doc--start-build "serde" nil))
+      (should-not (crate-doc--start-build "serde"))
       (should (eq (gethash (list "serde" crate-data-path) crate-doc--cache)
                   :failed)))))
 
@@ -2212,6 +2268,57 @@ Published name, canonical form, and versioned URL all open the crate."
             (should (= spawns 1))
             (kill-buffer (get-buffer "Crate: serde"))))
       (delete-file tmpfile))))
+
+(ert-deftest crate-doc-build-renders-every-waiting-buffer ()
+  "A buffer that asks mid-build renders when that build ends.
+`find-crate' starts the build for its Modules section, so a tree of
+the same crate joins a build that it never started, and one finished
+build must serve both."
+  (let* ((crate--data-cache (make-hash-table :test 'equal))
+         (crate-doc--cache (make-hash-table :test 'equal))
+         (crate-doc--status (make-hash-table :test 'equal))
+         (crate-doc--waiters (make-hash-table :test 'equal))
+         (crate-doc--in-flight (make-hash-table :test 'equal))
+         (crate-doc--generation 0)
+         (crate-data-path (crate-test--sqlite-db '("serde" :name "serde")))
+         (sentinel nil)
+         (rendered nil)
+         (detail (generate-new-buffer "crate-test-detail"))
+         (tree (generate-new-buffer "crate-test-tree")))
+    (unwind-protect
+        (progn
+          (crate-test--cache-crate "serde" :name "serde")
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (_) "/usr/bin/nix-build"))
+                    ((symbol-function 'crate-doc--nix-path)
+                     (lambda () "/fake/crate-doc.nix"))
+                    ((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq sentinel (plist-get args :sentinel))
+                       'fake-proc))
+                    ((symbol-function 'process-status) (lambda (_) 'exit))
+                    ((symbol-function 'process-exit-status) (lambda (_) 0))
+                    ((symbol-function 'crate-doc--json-from-build)
+                     (lambda (_out _name) (json-parse-string "{}"))))
+            ;; The detail buffer starts the build...
+            (with-current-buffer detail
+              (setq-local crate-doc--render-function
+                          (lambda () (push 'detail rendered)))
+              (crate-doc--json "serde"))
+            ;; ...and the tree joins it while it runs.
+            (with-current-buffer tree
+              (setq-local crate-doc--render-function
+                          (lambda () (push 'tree rendered)))
+              (should (eq (crate-doc--status-of "serde") 'running))
+              (crate-doc--json "serde"))
+            (funcall sentinel 'fake-proc "finished\n")
+            (should (member 'detail rendered))
+            (should (member 'tree rendered))
+            (should (= (hash-table-count crate-doc--waiters) 0))
+            (should-not (crate-doc--status-of "serde"))))
+      (kill-buffer detail)
+      (kill-buffer tree)
+      (delete-file crate-data-path))))
 
 (ert-deftest crate-doc-build-stale-result-discarded ()
   "A cache refresh mid-build discards the stale result."
@@ -2296,7 +2403,7 @@ Published name, canonical form, and versioned URL all open the crate."
                     ((symbol-function 'process-status) (lambda (_) 'exit))
                     ((symbol-function 'process-exit-status) (lambda (_) 0))
                     ((symbol-function 'crate-doc--json-from-build)
-                     (lambda (_out) (json-parse-string "{\"fake\": 1}")))
+                     (lambda (_out _name) (json-parse-string "{\"fake\": 1}")))
                     ((symbol-function 'crate-doc--module-tree)
                      (lambda (_json) '(("mymod" module nil nil)))))
             (find-crate "serde")

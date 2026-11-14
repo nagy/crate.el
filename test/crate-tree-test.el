@@ -629,6 +629,51 @@ Skip when no rustdoc JSON is present, which a plain shell run hits."
                             (buffer-substring-no-properties
                              (point-min) (point-max))))))
 
+(ert-deftest crate-tree-open-names-why-a-crate-build-cannot-start ()
+  "A database crate without a document names the reason.
+`crate-doc--json' answers nil and caches the reason, so the table
+must read it instead of claiming that no build ran."
+  (cl-letf (((symbol-function 'crate-doc--json) #'ignore)
+            ((symbol-function 'crate-doc--status-of)
+             (lambda (_name) "`nix-build' is not on `executable-find'"))
+            ((symbol-function 'crate--display-buffer)
+             (lambda (buffer) (set-buffer (get-buffer-create buffer)))))
+    (unwind-protect
+        (progn
+          (crate-tree--open "hayro" nil)
+          (should (string-match-p
+                   "No rustdoc JSON: `nix-build'"
+                   (buffer-substring-no-properties (point-min) (point-max)))))
+      (kill-buffer "Crate Tree: hayro"))))
+
+(ert-deftest crate-tree-open-names-a-running-crate-build ()
+  "A database crate with a build in flight says so."
+  (cl-letf (((symbol-function 'crate-doc--json) #'ignore)
+            ((symbol-function 'crate-doc--status-of) (lambda (_name) 'running))
+            ((symbol-function 'crate--display-buffer)
+             (lambda (buffer) (set-buffer (get-buffer-create buffer)))))
+    (unwind-protect
+        (progn
+          (crate-tree--open "hayro" nil)
+          (should (string-match-p
+                   "build in progress"
+                   (buffer-substring-no-properties (point-min) (point-max)))))
+      (kill-buffer "Crate Tree: hayro"))))
+
+(ert-deftest crate-tree-refresh-retries-a-crate-doc-build ()
+  "`g' drops the cached document of a database crate before it asks."
+  (let ((forgotten nil))
+    (cl-letf (((symbol-function 'crate-doc--forget)
+               (lambda (name) (setq forgotten name)))
+              ((symbol-function 'crate-doc--json) #'ignore)
+              ((symbol-function 'crate-doc--status-of) #'ignore)
+              ((symbol-function 'crate-tree--apply-json) #'ignore))
+      (with-temp-buffer
+        (crate-tree-mode)
+        (setq crate-tree--name "hayro")
+        (crate-tree--refresh)
+        (should (equal forgotten "hayro"))))))
+
 
 ;;; Local rustdoc builds
 

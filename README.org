@@ -168,6 +168,15 @@ crate runs =cargo doc= with JSON output, which needs =cargo=,
 the document from the Nix build that the detail buffer uses, so
 =M-x crate-tree= follows =crate-doc-enable=.
 
+A build that still runs reads =Rustdoc build in progress…=.  A build
+that cannot start names the fix in place of the rows: the =Modules=
+section reads =(rustdoc unavailable: REASON)= and the tree reads
+=No rustdoc JSON: REASON=.  =crate-doc-nix-file= names the
+=crate-doc.nix= file that =nix-build= runs, and the packaged build
+fills in the store path of its own copy.  =g= drops the cached answer
+and asks again, so a reader who fixes the reason retries from the
+table.
+
 * Development
 
 The flake builds the package and runs every check:

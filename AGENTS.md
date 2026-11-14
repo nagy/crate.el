@@ -56,8 +56,13 @@ stops compiling fails before a suite reads its JSON.
 
 The version is `0.1.0-unstable-<commit date>`.  The flake derives the
 date from `self.sourceInfo.lastModifiedDate`; `postPatch` writes the
-same string into the `;; Version:` header, and writes the store path of
-`pkgs.cargo` into the `crate-cargo-program` default.
+same string into the `;; Version:` header, writes the store paths of
+`pkgs.cargo` and `pkgs.rustc` into the `crate-cargo-program` and
+`crate-rustc-program` defaults, and writes the store path of
+`nix/crate-doc.nix` into `crate-doc-nix-file`.  The last one matters:
+`melpaBuild` installs the Emacs Lisp files alone, so a lookup through
+`locate-library` finds no `nix/` directory in the package, and a
+missing path once read as "No rustdoc JSON yet" with no build at all.
 
 ## Files
 
@@ -96,17 +101,43 @@ dependency copy, Cargo.toml completion, Embark.
    line degrades and `find-crate` keeps working.  A second request
    reuses the in-flight build.  The generation counter
    (`crate-doc--generation`, bumped by `crate-refresh-cache`) drops
-   stale results.  On completion the sentinel re-renders the crate
-   buffer from `crate-doc--json-from-build`.
-   `crate-doc--nix-path` looks next to `crate.el` and then in `nix/`.
+   stale results.  On completion the sentinel reads
+   `crate-doc--json-from-build` and re-renders every waiting buffer.
+   `crate-doc--nix-path` reads `crate-doc-nix-file` first, because the
+   installed package holds no `nix/` directory, and then looks next to
+   `crate.el` and in `nix/`.
 3. **`crate-doc--json`** reads the cache only (keyed by name and path);
-   a miss starts a build and answers nil.
-4. **`crate-doc--module-tree`** is pure and parses the JSON into
+   a miss registers the calling buffer in `crate-doc--waiters`, starts
+   a build and answers nil.  One build serves every buffer that shows
+   the crate: `find-crate` starts it for its Modules section, and a
+   tree of the same crate joins it, because a tree that only watched
+   the build it started would keep saying "build in progress" forever.
+   Each waiter renders through its own buffer-local
+   `crate-doc--render-function`, or `crate--render` when it holds none.
+4. **`crate-doc--json-from-build`** opens the file that the canonical
+   name of the crate names.  The Nix build documents the driver crate
+   and every dependency, and its output held 70 JSON files for hayro,
+   so the alphabetically first file names a dependency and never the
+   crate.  A crate whose document the build did not write answers nil.
+5. **`crate-doc--module-tree`** is pure and parses the JSON into
    `(NAME KIND (CHILDREN...) DOC)` tuples.  `KIND` is a symbol.
-5. **`crate-insert-module-items`** writes two spaces of indentation per
+6. **`crate-insert-module-items`** writes two spaces of indentation per
    level and a bracketed kind tag.  It skips `:null`-named use imports
    and opens one `crate-module` section per item, valued by the full
    path, so a fold and the line of point survive a render.
+
+**A build that cannot start names its reason.**  `crate-doc--status`
+holds `running` or the reason, keyed like `crate-doc--cache`, and
+`crate-doc--status-of` reads it.  Every failed start (no `nix-build`,
+no `crate-doc.nix`, a disabled `crate-doc-enable`, a spawn failure)
+and every failed build stores one, so the Modules section of a detail
+buffer reads `(rustdoc unavailable: REASON)` and a crate tree without
+rows reads `No rustdoc JSON: REASON` in place of a line that names
+nothing.  The tree takes the status from the same table, so a table
+of a database crate says "build in progress" while Nix runs.
+`crate-doc--forget` drops the document and the reason of one crate,
+and `g` in a tree calls it, so a reader who fixes the reason retries
+from the table.
 
 ### Tree tuple shape
 
@@ -189,8 +220,18 @@ line with the fix.  A failed build keeps its output buffer as
 `*crate-tree-build*` and shows the last line of `cargo doc` there.
 A `running` status reads "build in progress".
 
-The Nix build substitutes both the cargo and the rustc store paths
-into the defcustom defaults.
+A database crate draws its rows from the Nix build, so it reads the
+reason from `crate-doc--status-of` through `crate-tree--apply-doc`,
+which every entry point calls: `crate-tree--open`,
+`crate-tree--render-from-build` and `crate-tree--refresh`.  A tree of
+a database crate thus reads "build in progress" while Nix runs,
+where it once said "No rustdoc JSON yet" for every state.  The `g`
+key drops the cached document of the crate first, so a reader who
+fixes a missing `nix-build` retries from the table.
+
+The Nix build substitutes the cargo and rustc store paths into the
+defcustom defaults, and the store path of `crate-doc.nix` into
+`crate-doc-nix-file`.
 
 ### Crate tree mode
 

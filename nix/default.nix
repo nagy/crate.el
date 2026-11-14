@@ -59,6 +59,9 @@ melpaBuild {
       --replace-fail '(defcustom crate-cargo-program "cargo"' \
                      '(defcustom crate-cargo-program "${lib.getExe cargo}"'
     substituteInPlace crate.el \
+      --replace-fail '(defcustom crate-doc-nix-file nil' \
+                     '(defcustom crate-doc-nix-file "${./crate-doc.nix}"'
+    substituteInPlace crate.el \
       --replace-fail '(defcustom crate-rustc-program "rustc"' \
                      '(defcustom crate-rustc-program "${lib.getExe rustc}"'
   '';
