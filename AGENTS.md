@@ -461,6 +461,11 @@ makes a render quadratic in the module tree: 4000 nested sections take
 1.4 s with markers and 0.06 s without.  A crate buffer inserts once and
 then only reads.
 
+**A section that follows another starts with `(insert "\n")`.**
+One blank line separates two sections, and each inserter writes its
+own, so a hook function that inserts nothing leaves no blank line.
+`crate-insert-field` runs first and writes only its trailing newline.
+
 **A heading carries no colon.**  With markers inhibited,
 `magit-insert-child-count` rewrites the heading of a section that ends
 in a colon after its children recorded their positions, and a fold then
