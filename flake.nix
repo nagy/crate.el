@@ -45,7 +45,7 @@
 
           # Version: `<upstream>-unstable-<commit date>'.
           crateEl = pkgs.callPackage ./nix/default.nix {
-            inherit testCratesDb;
+            inherit testCratesDb harnessDoc;
             version = "0.1.0-unstable-${commitDate}";
           };
 

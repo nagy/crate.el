@@ -11,6 +11,8 @@
   # The build writes its store path into `crate-cargo-program'.
   cargo ? pkgs.cargo,
   testCratesDb,
+  # Rustdoc JSON of the fixture crate, built by nix/harness-doc.nix.
+  harnessDoc,
   version ? "0.1.0",
 }:
 
@@ -38,12 +40,14 @@ melpaBuild {
     export PATH="${emacsWithDeps}/bin:$PATH"
   '';
 
-  # The fixture database path, the version header and the cargo that
+  # The fixture paths, the version header and the cargo that
   # `crate-visit-directory' runs stay build-only, so patch them in.
   # Each pattern spells the default it replaces.
   postPatch = ''
     substituteInPlace test/crate-test.el \
       --replace-fail '@testCratesDb@' ${testCratesDb}
+    substituteInPlace test/crate-tree-test.el \
+      --replace-fail '@testHarnessJson@' ${harnessDoc}/harness.json
     substituteInPlace crate.el \
       --replace-fail ';; Version: 0.1.0' ';; Version: ${version}'
     substituteInPlace crate.el \

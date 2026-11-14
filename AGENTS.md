@@ -62,6 +62,7 @@ same string into the `;; Version:` header, and writes the store path of
 ## Files
 
 - `crate.el` — main package
+- `crate-tree.el` — crate item structure from rustdoc JSON
 - `ol-crate.el` — Org link support
 - `evil-crate.el` — optional evil layer (soft dependency)
 - `nix/crate-doc.nix` — rustdoc JSON build
@@ -72,7 +73,8 @@ same string into the `;; Version:` header, and writes the store path of
 - `nix/emacs-screenshot.nix` — screenshot and git branch
 - `flake.nix`, `flake.lock` — flake outputs and pinned inputs
 - `test/crate-test.el`, `test/crate-test-helper.el`,
-  `test/evil-crate-test.el` — ERT suites and fixtures
+  `test/crate-tree-test.el`, `test/evil-crate-test.el` — ERT suites and
+  fixtures
 - `test/fixtures/harness/` — dependency-free crate for rustdoc parsing
   tests, plus `test/fixtures/harness.structure.txt`, its cargo-modules
   output
@@ -116,6 +118,42 @@ docs with `(cadddr item)`.
 ;;   ("bar" function nil nil)             ;; leaf without doc
 ;;   ("submod" module (("baz" ...)) nil)  ;; module with children
 ```
+
+### Tree structure
+
+`crate-tree--items` is pure and turns the same rustdoc document into
+one `crate-tree-item` struct per item: path, name, kind, kind word,
+visibility word, span, docs, attrs, deprecation and children.  A row
+keys on its item path, so a fold survives a re-render.  The path is
+built during the walk, because rustdoc's `paths` table lists no
+associated item (no impl method, no trait member).
+
+Children come from four places: `module.items`, `trait.items`, the
+fields and variants of a type, and the impls that the type lists.  A
+synthetic impl and a blanket impl drop.  A trait impl that the crate
+writes itself stays, because `cargo-modules` prints its methods under
+the type.  Rustdoc leaves the visibility of those members implicit
+(`default`), and `cargo-modules` prints `pub(crate)`, so the parser
+follows that word.
+
+A restricted visibility path equal to the containing module reads
+`pub(self)`, a path equal to the module above it reads `pub(super)`,
+and any other path reads `pub(in crate::…)`.  Rustdoc reports a
+private item of a `pub(crate)` type as restricted to the crate, so
+`pub(crate)` covers it.
+
+The parser keeps source order.  `crate-tree--structure-text` sorts
+every sibling list by name and prints the `cargo-modules structure`
+format.  `test/fixtures/harness.structure.txt` holds the output of
+that tool for the fixture crate, so one ERT test compares the two
+line by line.
+
+`format_version` 57 through 61 parse, because rustc 1.97 in the flake
+and rustc 1.99 on the development machine both read the fields that
+this parser uses.  Any other value signals a `user-error` instead of
+half-reading the document.  A struct field, a
+variant and a `use` item carry a span.  An impl item carries none and
+never becomes a row.
 
 ## Conventions
 
@@ -473,7 +511,10 @@ the checked prefixes through `package-lint--sane-prefixes` in
 
 The `checkPhase` writes the fixture database path over the
 `@testCratesDb@` placeholder in `test/crate-test.el`, so the end-to-end
-tests skip in a plain shell and run inside the Nix build.
+tests skip in a plain shell and run inside the Nix build.  It writes
+the fixture rustdoc JSON path over `@testHarnessJson@` in
+`test/crate-tree-test.el` the same way, and
+`crate-tree-test--with-root` skips a test when that path is absent.
 
 - `crate-test--data-hash` builds a mock `crate-data` record from
   keyword-value pairs.
@@ -514,6 +555,15 @@ tests skip in a plain shell and run inside the Nix build.
 - A section test reads the tree (`magit-current-section`,
   `magit-section` slots) through `crate-test--section`, not the text.
   A fold test asserts `invisible-p` or `(oref section hidden)`.
+- `crate-tree-test--item` walks the fixture tree by name, and
+  `crate-tree-test--walk` visits a subtree.  Assertions read item
+  slots, because the tree holds structs that no buffer shows.
+- The cargo-modules parity test compares
+  `crate-tree--structure-text` with the committed
+  `test/fixtures/harness.structure.txt`.  Regenerate that file with
+  `NO_COLOR=1 cargo-modules structure --lib` in
+  `test/fixtures/harness/` after an edit to the fixture crate, and
+  check the diff before committing it.
 - Evil tests live in `test/evil-crate-test.el`, which requires evil
   before crate.  A key test enables `evil-local-mode`, enters a state
   and calls `key-binding`.
