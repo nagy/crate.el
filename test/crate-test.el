@@ -1487,6 +1487,22 @@ Substituted at build time by default.nix.")
 
 ;;; Gap-closing tests
 
+(ert-deftest crate-mode-render-of-a-new-buffer-starts-at-the-top ()
+  "A first render leaves point at the start of the buffer.
+The render erases the buffer and inserts the text, so point would
+end at the end of the buffer without a line to keep."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore))
+      (with-temp-buffer
+        (crate-mode)
+        (setq-local crate-name "test-crate")
+        (setq-local crate-data (crate-test--data-hash :name "test-crate"))
+        (crate--render)
+        (should (= (point) (point-min)))
+        (should-not (= (point) (point-max)))))))
+
 (ert-deftest crate-mode-render-keeps-point-on-field ()
   "A fresh render keeps point on the same field and column."
   (let ((crate--data-cache (make-hash-table :test 'equal)))

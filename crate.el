@@ -989,11 +989,21 @@ while a user waits for the buffer to load."
 (defun crate--restore-record (record)
   "Move point to the line that RECORD names.
 A record of a section that the render dropped leaves point at the
-start of the buffer."
+start of the buffer.  A nil RECORD leaves point alone: the line
+then holds no place to keep."
   (pcase-let ((`(,section . (,line ,column)) record))
     (when section
       (unless (magit-section-goto-successor section line column)
         (goto-char (point-min))))))
+
+(defun crate--goto-start ()
+  "Move the buffer point and every window point to the start of the buffer.
+A render of a buffer that held no text keeps no line, so this
+function puts a first render at the top instead of at the end of
+the text that the render inserted."
+  (goto-char (point-min))
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (set-window-point window (point-min))))
 
 (defun crate--restore-window-records (records)
   "Move the point of the buffer and of every window of RECORDS.
@@ -1334,10 +1344,13 @@ Keeps point on the line that it was on before the render, by the
 section of that line, and keeps its column.  Every other window
 that shows the buffer keeps the line of its own point too.  A
 folded section stays folded, because `magit-section' keeps the
-visibility of a section by its value."
+visibility of a section by its value.
+A buffer that held no text has no line to keep, so a first render
+leaves point and every window point at the start of the buffer."
   ;; The records come before the erase, because the erase removes the
   ;; text that both the sections and the window points point into.
-  (let ((records (crate--window-records)))
+  (let* ((fresh (= (point-min) (point-max)))
+         (records (unless fresh (crate--window-records))))
     ;; Bind `inhibit-read-only' for the whole render: the buffer may
     ;; already be read-only from a previous render.
     (let ((inhibit-read-only t))
@@ -1351,7 +1364,9 @@ visibility of a section by its value."
     ;; unfolded, and the hook that reads it stays cheap.
     (let ((magit-section-cache-visibility nil))
       (magit-section-show magit-root-section))
-    (crate--restore-window-records records)))
+    (if fresh
+        (crate--goto-start)
+      (crate--restore-window-records records))))
 
 
 ;;; Completion

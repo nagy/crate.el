@@ -572,6 +572,15 @@ window runs inside `save-excursion`: a window keeps the point of the
 buffer point, so a restore must not move the buffer point while it
 serves another window.
 
+**A buffer that held no text restores no line.**  `crate--render`
+takes `fresh` from `(= (point-min) (point-max))` before the erase, and
+a fresh render calls `crate--goto-start`, which puts the buffer point
+and every window point at `point-min`.  Without that step a first
+`find-crate` would leave point at the end of the text that the render
+inserted, because no line holds a record to restore.  A refresh keeps
+the old behavior, so `g` and a second `find-crate` leave point where
+it was.
+
 A section value that a render keeps must stay stable across renders.
 A field carries its key, a module carries its full path, and a group
 carries nil.  A module path and not a bare name, because two modules
