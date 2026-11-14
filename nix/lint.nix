@@ -16,12 +16,10 @@ runCommand "crate-lint"
     nativeBuildInputs = [
       # `magit-section' joins the pack so package-lint can see that the
       # declared dependency is installable; the lint reads source only.
-      (emacsPackages.emacsWithPackages (
-        p: [
-          p.package-lint
-          p.magit-section
-        ]
-      ))
+      (emacsPackages.emacsWithPackages (p: [
+        p.package-lint
+        p.magit-section
+      ]))
       # Gives Emacs a writable HOME, so the builder needs no `export
       # HOME=$TMPDIR' line and no two checks share a home directory.
       pkgs.writableTmpDirAsHomeHook
@@ -34,15 +32,11 @@ runCommand "crate-lint"
     # what a build would have staged.
     cp -r "$src"/. .
 
-    # `package-lint-main-file' is mandatory once `test/*.el' joins the
-    # glob: without it package-lint treats each test file as its own
-    # package and complains about the missing `Package-Requires' header.
-    # `find-crate' is the public entry point and does not carry the
-    # `crate-' prefix, so the sane-prefix list grows by that one name.
-    # The four `with-eval-after-load' calls are deliberate: they keep
-    # ol-crate, evil-crate and the browse-url handler off the load path
-    # until the optional dependency arrives.  package-lint flags that
-    # idiom as a warning, so only errors fail the gate.
+    # `package-lint-main-file' stops package-lint from treating each
+    # test file as its own package.  `find-crate' has no `crate-'
+    # prefix, so it joins the sane-prefix list.  The four
+    # `with-eval-after-load' calls are deliberate, so only errors fail
+    # the gate.
     emacs --batch -L . -L test \
       -l package-lint \
       --eval '(setq package-lint-main-file "crate.el")' \

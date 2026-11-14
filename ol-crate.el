@@ -46,8 +46,8 @@
 
 (defun crate-org-export (path description backend _info)
   "Export a `crate:' link to crates.io.
-PATH is the crate name, DESCRIPTION is the link text,
-BACKEND is the export backend."
+PATH is the crate name, DESCRIPTION is the link text, and BACKEND
+is the export backend."
   (let ((url (format "%s%s" crate--crates-io-url
                      (url-hexify-string path)))
         (desc (or description path)))
@@ -57,8 +57,7 @@ BACKEND is the export backend."
       (_ desc))))
 
 (defun crate--org-follow (path)
-  "Open the `crate:' link PATH.
-If a buffer already exists for this crate, just switch to it."
+  "Open the `crate:' link PATH."
   (let* ((cand (crate--canonical-name path))
          (bufname (format "Crate: %s" cand)))
     (if-let* ((buf (get-buffer bufname)))

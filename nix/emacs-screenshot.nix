@@ -1,29 +1,20 @@
-# emacs-screenshot.nix — render the README screenshot.
+# Render the README screenshot.
 #
-# Composes the package under test with a fixture SQLite database,
-# boots Emacs under Xvfb, drives it to the `Crate: serde' buffer and
-# exports the frame.  Both dependencies are passed in by the flake so
-# this expression never re-evaluates nix/default.nix.
+# Boots Emacs under Xvfb, opens the `Crate: serde' buffer and exports
+# the frame.  Both dependencies come from the flake.
 
 {
   pkgs ? import <nixpkgs> { },
   lib ? pkgs.lib,
   emacs ? pkgs.emacs,
-  # The built crate.el package, needed inside the screenshot Emacs.
+  # The package, inside the screenshot Emacs.
   crateEl,
-  # Fixture crates-io.db (nix/test-crates-db.nix) used as
-  # `crate-data-path' so no real database is required.
+  # Fixture crates-io.db, used as `crate-data-path'.
   testCratesDb,
-  # lib from the nur-packages flake input; supplies mkGitRepository,
-  # which turns the SVG into a bare `.git' directory for the README.
+  # Supplies mkGitRepository for the bare `.git' directory.
   nurLib,
 }:
 
-let
-  # Emacs reads the SQLite database directly now (no JSON dump), so
-  # point it at the store path of the fixture database.
-  testCratesDbPath = testCratesDb;
-in
 rec {
   mkEmacsScreenshot =
     {
@@ -36,9 +27,8 @@ rec {
       {
         NIX_PATH = "nixpkgs=${pkgs.path}";
         NIX_STATE_DIR = "/build/nix-state";
-        # The sandbox has no dconf/gsettings database; without this the
-        # GTK init makes GLib criticals noisy (and Emacs sometimes exits
-        # before the frame is exported).
+        # The sandbox has no dconf or gsettings database, and without
+        # this GTK init makes GLib criticals noisy.
         GSETTINGS_BACKEND = "memory";
         nativeBuildInputs = [
           (emacs.pkgs.withPackages (epkgs: [
@@ -51,13 +41,13 @@ rec {
         ];
         emacsCodeFile = pkgs.writeText "emacscode.el" emacsCode;
         screenshotScript = pkgs.writeText "script.el" ''
-          (run-at-time 10 nil (lambda () (kill-emacs 1)))   ; fallback killing
+          (run-at-time 10 nil (lambda () (kill-emacs 1)))
           (load-theme 'modus-${if light then "operandi" else "vivendi"} t)
           (menu-bar-mode -1)
           (tool-bar-mode -1)
           (toggle-scroll-bar -1)
           (fringe-mode 0)
-          (message nil)                            ; clear out echo area
+          (message nil)
           (defun screenshot-capture ()
             "Export the selected frame as PNG and exit."
             (let ((data (x-export-frames (selected-frame) 'png)))
@@ -89,7 +79,7 @@ rec {
       emacsCode = ''
         (require 'crate)
         (require 'marginalia)
-        (setq crate-data-path "${testCratesDbPath}")
+        (setq crate-data-path "${testCratesDb}")
         (defun screenshot-poll ()
           "Poll until the crate buffer is displayed, then capture."
           (when (get-buffer "*Warnings*")

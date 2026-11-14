@@ -1,15 +1,7 @@
-# crate-doc.nix — companion Nix file for crate.el
-#
-# Invoked by crate.el as:
+# Companion Nix file for crate.el, invoked as:
 #   nix-build crate-doc.nix --argstr crateName serde
 #
-# Fully sandbox-safe: downloads the crates.io-index via fetchFromGitHub
-# (fixed-output derivation), generates Cargo.lock offline, then builds
-# rustdoc JSON via crane + nightly rustc.  Every derivation is cached
-# in the Nix store — repeated requests reuse cached results.
-#
-# Output: a directory containing rustdoc JSON files for the crate
-# (under $out/share/doc/).
+# Output: rustdoc JSON for the crate under $out/share/doc/.
 #
 # TODO: switch to stable rustc once
 # <https://github.com/rust-lang/cargo/issues/12103> stabilizes.
@@ -20,12 +12,7 @@
 }:
 
 let
-  # ---------------------------------------------------------------------------
-  # Pinned dependencies — no flakes, no channels, pure evaluation
-  # ---------------------------------------------------------------------------
-
   rustOverlaySrc = builtins.fetchTarball {
-    # Pinned rev: e598b37857b895b81020a65a802ef55f5bbed72f
     url = "https://github.com/oxalica/rust-overlay/archive/e598b37857b895b81020a65a802ef55f5bbed72f.tar.gz";
     sha256 = "133ws36cq49h7h66apzjiin3mdz5260jgp08jisnvrnfxx1ajmra";
   };
@@ -42,10 +29,7 @@ let
   };
   crane = import craneSrc { inherit pkgs; };
 
-  # ---------------------------------------------------------------------------
-  # Offline lockfile generation (sandbox-safe, like mkCargoLock)
-  # ---------------------------------------------------------------------------
-
+  # The local index lets the lockfile resolve with no network.
   cratesIoIndex = pkgs.fetchFromGitHub {
     owner = "rust-lang";
     repo = "crates.io-index";
@@ -53,7 +37,7 @@ let
     hash = "sha256-mOBKMzftjO6MpGsYqec4nakDJwP1ci0Jb3k2dHQ1t2g=";
   };
 
-  # cargo config that uses the local crates.io-index, fully offline
+  # cargo config that uses the local crates.io-index
   cargoConfig = pkgs.linkFarm "crate-doc-cargo-home" {
     "config.toml" = pkgs.writers.writeTOML "config.toml" {
       source.crates-io.replace-with = "local-copy";
@@ -86,10 +70,6 @@ let
         cargo generate-lockfile
         cp Cargo.lock $out
       '';
-
-  # ---------------------------------------------------------------------------
-  # Project source
-  # ---------------------------------------------------------------------------
 
   src = pkgs.runCommand "crate-doc-src-${crateName}" { } ''
     mkdir -p $out/src

@@ -74,15 +74,9 @@
 (defvar browse-url-default-handlers)
 (defvar thing-at-point-provider-alist)
 
-(defvar-local crate-name nil
-  "Name of the crate that the current buffer shows.")
-(defvar-local crate-data nil
-  "Record of the crate that the current buffer shows.")
-(defvar-local crate-local-path nil
-  "Directory of the local crate that the current buffer shows.
-nil in a buffer of a crates.io crate.  It tells `crate--dependencies'
-and `crate--insert-repository' that the record of the buffer comes
-from `cargo metadata' and not from the SQLite database.")
+(defvar-local crate-name nil)
+(defvar-local crate-data nil)
+(defvar-local crate-local-path nil)
 
 (defgroup crate nil
   "Browse Rust crates from a local SQLite database."
@@ -96,9 +90,7 @@ The database should contain a `crates' table with columns:
 name, display_name, description, documentation, homepage,
 repository, created_at, updated_at.
 
-The `name` column holds the published crate name, `display_name`
-the pretty form.  Lookups use canonical names (see
-`crate--canonical-name`); display uses the `name' field.
+Lookups use canonical names (see `crate--canonical-name').
 
 All caches key on this path, so changing it — even via plain
 `setq' — serves fresh data with no `crate-refresh-cache' call."
@@ -107,53 +99,43 @@ All caches key on this path, so changing it — even via plain
 
 (defcustom crate-cargo-program "cargo"
   "Cargo executable that `crate-visit-directory' runs.
-The value goes through `executable-find', so a bare name searches
-the variable `exec-path' and an absolute file name is used as it
-stands.  The Nix build substitutes the store path of the packaged
-cargo, so an installed package needs no cargo on `PATH'.  Set it
-to nil to turn the local-crate command off."
+The Nix build substitutes the store path of the packaged cargo.
+Set it to nil to turn the local-crate command off."
   :type '(choice (const :tag "Off" nil)
                  (file :tag "Cargo executable"))
   :group 'crate)
 
 
-(defconst crate--crates-io-url "https://crates.io/crates/"
-  "Base URL for crates.io crate pages.")
+(defconst crate--crates-io-url "https://crates.io/crates/")
 
 (defcustom crate-annotation-width 70
-  "Maximum width of the description annotation shown during completion."
+  "Maximum width of the description annotation."
   :type 'integer
   :group 'crate)
 
 (defcustom crate-completion-limit 200
   "Maximum number of crate names one completion query returns.
-A short prefix matches tens of thousands of names (358 423 crates
-in a full dump, 35 628 of them under \"s\"), and every candidate
-costs a row fetch.  The query stops here.  Set it to nil to fetch
-every match."
+A short prefix matches tens of thousands of names, and every
+candidate costs a row fetch, so the query stops here.  Set it to
+nil to fetch every match."
   :type '(choice (const :tag "Every match" nil) integer)
   :group 'crate)
 
 (defcustom crate-dependents-limit 200
   "Maximum number of dependents the Dependents section lists.
-A popular crate has over a hundred thousand dependents: serde has
-135 172, and one button per dependent takes 1.3 s to render.  The
-heading marks a cut list with a plus sign.  Set it to nil to list
-every dependent."
+serde has 135 172 dependents, and one button per dependent takes
+1.3 s to render, so the section marks a cut list with a plus
+sign.  Set it to nil to list every dependent."
   :type '(choice (const :tag "Every dependent" nil) integer)
   :group 'crate)
 
 (defcustom crate-browse-name-min-width 20
-  "Smallest width of the Crate column of a narrow browse table.
-The table shrinks its columns when the window cannot hold them,
-and the Crate column stops here."
+  "Smallest width of the Crate column."
   :type 'integer
   :group 'crate)
 
 (defcustom crate-browse-description-min-width 30
-  "Width that the Description column keeps when the columns shrink.
-The last column takes the remaining space, so this value decides
-how much the columns before it must give up."
+  "Width that the Description column keeps when the columns shrink."
   :type 'integer
   :group 'crate)
 
@@ -161,70 +143,48 @@ how much the columns before it must give up."
   "Largest table that refits its columns after a window size change.
 A refit reprints the table, and `tabulated-list-print' sorts the
 entries again, so a full crates.io dump would stall on every frame
-resize.  A table above this size keeps the widths of its last fit.
-Set it to nil to refit every table."
+resize.  Set it to nil to refit every table."
   :type '(choice (const :tag "Every table" nil) integer)
   :group 'crate)
 
 (defcustom crate-browse-version-max-width 28
-  "Widest Version column of a browse table.
-The column grows to the longest visible version, up to this width,
-so a pre-release suffix stays readable."
+  "Widest Version column of a browse table."
   :type 'integer
   :group 'crate)
 
 
 (defun crate--canonical-name (name)
-  "Return the canonical form of crate NAME.
-Downcases and replaces hyphens with underscores for consistent
-lookup in `crate--data-cache'."
+  "Return the canonical lookup form of crate NAME."
   (declare (pure t) (side-effect-free t))
   (downcase (string-replace "-" "_" name)))
 
 
 (defcustom crate-repository-directory nil
   "Directory for local crate repository checkouts.
-If non-nil and the crate has a repository URL, `crate-mode' sets
-`default-directory' to a local checkout directory derived from
-the URL.  Can be a string (a directory path under which repo
-directories live) or a function that receives the repository URL
-and returns a directory path."
+A string is the base directory of the checkouts, a function maps
+each repository URL to a directory, and nil turns the mapping off."
   :type '(choice (const :tag "Off" nil)
                  (directory :tag "Base directory")
                  (function :tag "Mapping function"))
   :group 'crate)
 
 (defcustom crate-visit-hook nil
-  "Hook run after `find-crate' opens a crate detail buffer.
-Runs in the Crate: <name> buffer, after `crate-name' and
-`crate-data' have been set (and the buffer rendered).  This is the
-single place all entry points converge: interactive `find-crate',
-crates.io URL handling, `crate-browse-visit', bookmarks, and
-dependency buttons.
-
-`crate-visit-directory' runs the hook too, after it sets
-`crate-local-path'.
-
-Functions may use the buffer-local `crate-name', `crate-data' and
-`crate-local-path' to, e.g., set `default-directory' to a local
-checkout."
+  "Hook run after a crate buffer opens.
+Runs in the crate buffer, after `crate-name', `crate-data' and
+`crate-local-path' are set and the buffer rendered.  `find-crate'
+and `crate-visit-directory' both run it."
   :type 'hook
   :group 'crate)
 
 (defcustom crate-display-buffer-action nil
   "Display action for the `find-crate' detail buffer.
-nil keeps `switch-to-buffer', which replaces the current buffer.
-Set it to `crate--other-window-action' to open a crate beside the
-buffer that you started from.  The `o' key and the middle mouse
-button of `crate-browse-mode' bind this option for one call."
+nil keeps `switch-to-buffer'.  Any other value goes to
+`pop-to-buffer' as its display action."
   :type '(choice (const :tag "Selected window" nil) function)
   :group 'crate)
 
 (defcustom crate-goto-address t
-  "Non-nil if a detail buffer links the URLs in its text.
-When non-nil, `goto-address-mode' turns the homepage, repository
-and documentation URL of a crate into a link, so a click and RET
-open it.  Set it to nil to keep the URLs as plain text."
+  "Non-nil if a detail buffer links the URLs in its text."
   :type 'boolean
   :group 'crate)
 
@@ -235,14 +195,8 @@ open it.  Set it to nil to keep the URLs as plain text."
     crate-insert-modules)
   "Functions that insert the sections of a crate detail buffer.
 `crate--render' runs the entries in order through
-`magit-run-section-hook'.  Drop an entry to drop a section, or
-reorder the entries to reorder the sections.  Keep an entry cheap:
-`find-crate' runs every entry for every crate.
-
-An entry receives no arguments, runs in the crate buffer with
-`crate-name' and `crate-data' bound, and inserts through
-`magit-insert-section'.  See `crate-insert-fields' for the shape
-of an entry."
+`magit-run-section-hook'.  An entry takes no arguments, runs in
+the crate buffer and inserts through `magit-insert-section'."
   :type '(repeat function)
   :group 'crate)
 
@@ -258,24 +212,16 @@ of an entry."
     (updated_at . "Updated"))
   "Fields of a crate detail buffer, in display order.
 Each entry pairs a key of the `crates' table with the label of its
-line.  Drop an entry to drop a field, or reorder the entries to
-reorder the lines.  `crate-insert-fields' inserts one section per
-entry."
+line."
   :type '(alist :key-type symbol :value-type string)
   :group 'crate)
 
-(defconst crate--field-label-format "%-15s"
-  "Format of a field label.
-The labels line up with their values, so `Description:' and
-`Documentation:' keep their values in the same column.")
+(defconst crate--field-label-format "%-15s")
 
 (defconst crate--other-window-action
   '((display-buffer-reuse-window display-buffer-pop-up-window)
     (inhibit-same-window . t))
-  "Display action that opens a buffer in another window.
-Emacs has no ready-made action for this: it reuses a window that
-already shows the buffer, or splits one, and never uses the
-selected window.")
+  "Display action that never uses the selected window.")
 
 (defun crate--display-buffer (buffer)
   "Show BUFFER through `crate-display-buffer-action'."
@@ -290,35 +236,28 @@ selected window.")
 
 (defconst crate--crates-columns
   '(name display_name description documentation homepage repository
-         created_at updated_at latest_version license downloads)
-  "Columns of the `crates' table, in the order a crate record reads them.")
+         created_at updated_at latest_version license downloads))
 
 (defconst crate--crates-sql
   (format "SELECT %s FROM crates"
-          (mapconcat #'symbol-name crate--crates-columns ", "))
-  "Query that selects every crate record.")
+          (mapconcat #'symbol-name crate--crates-columns ", ")))
 
 (defconst crate--crate-sql
   (format "SELECT %s FROM crates WHERE name IN (?, ?)"
-          (mapconcat #'symbol-name crate--crates-columns ", "))
-  "Query that selects one crate record by its published name.")
+          (mapconcat #'symbol-name crate--crates-columns ", ")))
 
 (defun crate--crate-spellings (name)
   "Return the published spellings that crate NAME can have.
-The database keys a crate by its published name, which uses either
-hyphens or underscores; `crate--canonical-name' uses underscores
-only.  No published name mixes both separators, and no two crates
-share a canonical form, so two spellings reach every crate.
-Verified against a full crates.io dump of 358 423 names."
+No published name mixes both separators, and no two names share a
+canonical form, so two spellings reach every crate of a full dump
+of 358 423 names."
   (declare (side-effect-free t))
   (let ((canonical (crate--canonical-name name)))
     (list canonical (string-replace "_" "-" canonical))))
 
 (defun crate--crate-entry (row)
   "Return a crate record built from the `crates' table ROW.
-ROW holds the values of `crate--crates-columns'.  A nil value
-inserts no key, so a reader cannot tell an absent value from an
-absent column."
+A nil value inserts no key."
   (declare (side-effect-free t))
   (let ((entry (make-hash-table :test #'equal)))
     (cl-loop for column in crate--crates-columns
@@ -331,15 +270,11 @@ absent column."
 
 (defun crate--list ()
   "Load every crate from the SQLite database at `crate-data-path'.
-Returns a hash table keyed by canonical crate name, or nil if
-the file is missing or cannot be read.  Results are memoized
-via `with-memoization'; a :failed sentinel prevents retrying
-a corrupt or missing file on every subsequent call.  The cache
-key includes `crate-data-path', so a path switch self-invalidates.
+Returns nil if the file is missing or cannot be read.
 
 A full crates.io dump holds 358 423 rows, so this builds 358 423
-hash tables: 1.8 s and 647 MiB, fresh once per database path.  A
-single-crate lookup reads `crate--crate' instead."
+hash tables: 1.8 s and 647 MiB.  A single-crate lookup reads
+`crate--crate' instead."
   (let ((cached
          (with-memoization (gethash (list 'data crate-data-path) crate--data-cache)
            (if (and crate-data-path (file-exists-p crate-data-path))
@@ -362,12 +297,8 @@ single-crate lookup reads `crate--crate' instead."
 
 (defun crate--crate (name)
   "Return the crates-table record for crate NAME, or nil.
-NAME is canonicalized first.  One lookup through the `name'
-primary-key btree costs 0.07 ms on a full crates.io dump, so this
-scales where `crate--list' does not.  Memoized in
-`crate--data-cache' with the database path in the key; a :failed
-sentinel caches a missing row and a failed query alike, so
-neither repeats its query."
+One lookup through the `name' primary-key btree costs 0.07 ms on a
+full crates.io dump, so this scales where `crate--list' does not."
   (let* ((canonical (crate--canonical-name name))
          (key (list 'crate crate-data-path canonical))
          (cached (with-memoization (gethash key crate--data-cache)
@@ -376,9 +307,7 @@ neither repeats its query."
       cached)))
 
 (defun crate--crate-query (name)
-  "Return the crates-table record for NAME from SQLite.
-Returns nil when no row matches and when the database cannot be
-read."
+  "Return the crates-table record for NAME from SQLite, without the cache."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (condition-case nil
         (let ((db (sqlite-open crate-data-path)))
@@ -392,9 +321,7 @@ read."
 
 (defun crate--database-readable-p ()
   "Return non-nil when `crate-data-path' answers a query.
-A missing file and a file that is not a database both answer nil.
-Distinguishes an unreadable database from a missing crate, which
-look the same to `crate--crate'."
+A missing file and a file that is not a database both answer nil."
   (and crate-data-path
        (file-exists-p crate-data-path)
        (condition-case nil
@@ -420,11 +347,8 @@ look the same to `crate--crate'."
 
 (defun crate-local--metadata (dir)
   "Return the `cargo metadata' JSON of the package in DIR, or nil.
-`--no-deps' keeps the query local: cargo reads the manifest and the
-workspace, resolves no dependency and downloads nothing, and
-`--offline' guarantees that promise.  A directory without a
-manifest, a nil `crate-cargo-program', a missing cargo and a
-failing call all answer nil."
+`--no-deps' resolves no dependency and downloads nothing, and
+`--offline' guarantees that promise."
   (when-let* ((program crate-cargo-program)
               (cargo (executable-find program)))
     (with-temp-buffer
@@ -440,9 +364,8 @@ failing call all answer nil."
 
 (defun crate-local--package (json manifest)
   "Return the package of `cargo metadata' JSON that MANIFEST names.
-A directory inside a workspace answers every package of that
-workspace, so the package whose `manifest_path' is MANIFEST wins,
-and the first package answers as a fallback."
+A workspace directory answers every package of the workspace, so
+the first package answers as a fallback."
   (declare (side-effect-free t))
   (when-let* ((packages (gethash "packages" json)))
     (or (seq-find (lambda (package)
@@ -452,9 +375,7 @@ and the first package answers as a fallback."
         (car packages))))
 
 (defun crate-local--git-url (source)
-  "Return the web URL that git SOURCE names.
-SOURCE reads `git+https://github.com/nagy/crate.el#abc1234', so the
-`git+' scheme and the commit fragment both go."
+  "Return the web URL that git SOURCE names."
   (declare (pure t) (side-effect-free t))
   (let ((url (string-remove-prefix "git+" source)))
     (if-let* ((hash (string-search "#" url)))
@@ -463,13 +384,10 @@ SOURCE reads `git+https://github.com/nagy/crate.el#abc1234', so the
 
 (defun crate-local--dependency-row (dep dir)
   "Return a dependency row for the `cargo metadata' dependency DEP.
-DIR is the crate directory.  The row has the shape of a
-`dependencies' database row, `(NAME REQ KIND OPTIONAL)', plus a
-`(KIND . TARGET)' source spec that says where the code of a path
-or a git dependency lives.  A registry dependency carries no
-source spec, because its REQ says which version it names.  Cargo
-answers a path as an absolute name, so the row makes it relative
-to DIR and reads like the manifest line that names it."
+The row has the shape of a `dependencies' database row plus a
+`(KIND . TARGET)' source spec, which says where the code of a path
+or a git dependency lives.  Cargo answers a path as an absolute
+name, so the row makes it relative to DIR."
   (declare (side-effect-free t))
   (let ((kind (gethash "kind" dep))
         (optional (gethash "optional" dep))
@@ -487,9 +405,9 @@ to DIR and reads like the manifest line that names it."
 
 (defun crate-local--entry (package dir)
   "Return a crate record for the `cargo metadata' PACKAGE in DIR.
-The record takes the keys of a database record, so
-`crate-detail-fields' reads it, and it adds the `path' key, which a
-reader can show by adding `(path . \"Path\")' to the fields."
+The record reads like a database record and adds the `path' key,
+which a reader can show by adding `(path . \"Path\")' to
+`crate-detail-fields'."
   (declare (side-effect-free t))
   (let ((entry (make-hash-table :test #'equal))
         (path (directory-file-name (file-name-as-directory
@@ -509,10 +427,7 @@ reader can show by adding `(path . \"Path\")' to the fields."
     entry))
 
 (defun crate-local--record (dir)
-  "Return the crate record of the local crate in DIR, or nil.
-Memoized in `crate--data-cache' under the manifest path, with a
-:failed sentinel for a directory that holds no crate and for a
-`cargo metadata' call that fails."
+  "Return the crate record of the local crate in DIR, or nil."
   (let* ((dir (file-name-as-directory (expand-file-name dir)))
          (manifest (crate-local--manifest dir))
          (cached (with-memoization
@@ -533,13 +448,8 @@ Memoized in `crate--data-cache' under the manifest path, with a
 
 (defcustom crate-doc-enable t
   "When non-nil, enable on-demand rustdoc builds via Nix.
-When enabled, `crate-mode' can build and display full rustdoc
-documentation (module trees, type signatures, docstrings) by
-invoking `nix-build' on the companion crate-doc.nix file.
-When nil, no module tree is shown.
-
-Requires Nix and the nightly rustc toolchain (fetched
-automatically by the Nix expression)."
+Requires Nix and the nightly rustc toolchain, which the companion
+crate-doc.nix fetches."
   :type 'boolean
   :group 'crate)
 
@@ -548,11 +458,7 @@ automatically by the Nix expression)."
 Memoized — cleared by `crate-refresh-cache'.")
 
 (defun crate-doc--nix-path ()
-  "Return the absolute path to the companion crate-doc.nix file.
-Uses `locate-library' to find it relative to crate.el on
-`load-path' (the source tree keeps it in the nix/ subdirectory,
-the installed package next to crate.el).  Returns nil if the file
-cannot be found."
+  "Return the path of the companion crate-doc.nix file, or nil."
   (when-let* ((lib (locate-library "crate"))
               (dir (file-name-directory lib)))
     (seq-find #'file-exists-p
@@ -560,8 +466,7 @@ cannot be found."
                     (expand-file-name "nix/crate-doc.nix" dir)))))
 
 (defvar crate-doc--in-flight (make-hash-table :test #'equal)
-  "In-flight async doc builds keyed by crate name.
-A second request for the same crate reuses the running build.")
+  "In-flight async doc builds keyed by crate name.")
 
 (defvar crate-doc--generation 0
   "Generation counter for async doc builds.
@@ -569,9 +474,7 @@ Bumped by `crate-refresh-cache'; results from older generations
 are discarded.")
 
 (defun crate-doc--json-from-build (out)
-  "Parse the rustdoc JSON from nix-build output buffer OUT, or nil.
-Extracts the Nix store path from the last output line, then picks
-the crate's JSON (non-driver) under share/doc."
+  "Parse the rustdoc JSON from `nix-build' output buffer OUT, or nil."
   (with-current-buffer out
     (goto-char (point-max))
     (forward-line -1)
@@ -596,13 +499,10 @@ the crate's JSON (non-driver) under share/doc."
 
 (defun crate-doc--start-build (name buffer)
   "Start an async rustdoc build for crate NAME, re-rendering BUFFER.
-Returns non-nil when a build is running (started now or reused),
-nil when unavailable (missing `nix-build', missing crate-doc.nix,
-or a spawn failure) — in which case the `:failed' sentinel caches
-the negative (graceful degradation: no module tree, no error).
-The process sentinel stores the parsed JSON and re-renders BUFFER;
-results from stale generations (after `crate-refresh-cache') are
-discarded."
+Returns non-nil when a build is running, nil when unavailable: a
+missing `nix-build', a missing crate-doc.nix or a spawn failure
+caches the `:failed' sentinel, so the buffer shows no module tree
+and no error."
   (cond
    ;; Reuse the running build instead of spawning a second one.
    ((gethash name crate-doc--in-flight) t)
@@ -655,10 +555,8 @@ discarded."
 
 (defun crate-doc--json (name)
   "Return the parsed rustdoc JSON for crate NAME, or nil.
-First use starts an ASYNC build (see `crate-doc--start-build') and
-returns nil; the crate buffer re-renders with the module tree when
-the build completes.  Also nil while building, when docs cannot be
-built, or after a prior build failed (cached `:failed' sentinel)."
+A first call starts an async build and answers nil.  The build
+re-renders the crate buffer when it completes."
   (when (and crate-doc-enable (crate--crate name))
     (let ((cached (gethash (list name crate-data-path) crate-doc--cache)))
       (cond
@@ -670,15 +568,9 @@ built, or after a prior build failed (cached `:failed' sentinel)."
 
 (defun crate-doc--module-tree (json)
   "Return the module tree from rustdoc JSON.
-JSON is a hash table as returned by `json-parse-buffer' from a
-rustdoc JSON file.  Returns a nested list:
-
-  ((NAME KIND (CHILDREN...) DOC) ...)
-
-where children have the same structure.  KIND is a symbol:
-`module', `struct', `trait', `function', `macro', `enum', etc.
-DOC is the first sentence of the item's docstring, or nil.
-Non-module items have nil as children."
+Returns a nested list `((NAME KIND (CHILDREN...) DOC) ...)', where
+KIND is a symbol such as `module' or `struct' and DOC is the first
+sentence of the item's docstring, or nil."
   (declare (pure t) (side-effect-free t))
   (when-let* ((root-id (gethash "root" json))
               (index (gethash "index" json))
@@ -730,8 +622,8 @@ Non-module items have nil as children."
 
 (defun crate--description ()
   "Return the description of the current crate.
-Collapses newlines and truncates to `fill-column'.  Returns an
-empty string when the description is missing or :null."
+Truncates to `fill-column', and answers an empty string when the
+description is missing or :null."
   (declare (side-effect-free t))
   (or (when-let* ((it (gethash "description" crate-data))
                   ((not (eq it :null))))
@@ -742,10 +634,7 @@ empty string when the description is missing or :null."
 
 (defun crate--deps (name)
   "Return dependency rows for crate NAME from the SQLite database.
-Returns a list of (dep_name req kind optional) lists, or nil.
-Memoized in `crate--data-cache' keyed by database path; a :failed
-sentinel prevents retrying failed queries, and nil results (no
-rows) are cached."
+Each row is `(DEP_NAME REQ KIND OPTIONAL)'."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (let ((cached (with-memoization
                     (gethash (list 'deps crate-data-path name) crate--data-cache)
@@ -768,15 +657,12 @@ rows) are cached."
 
 (defconst crate--dependents-sql
   "SELECT DISTINCT crate_name FROM dependencies WHERE dep_name = ?
-   ORDER BY crate_name"
-  "Reverse query over the `dependencies' table.")
+   ORDER BY crate_name")
 
 (defun crate--dependents (name)
   "Return the names of crates depending on crate NAME.
 A reverse lookup on the `dependencies' table, cut at
-`crate-dependents-limit' rows: serde has 135 172 dependents, and
-one button per dependent costs 1.3 s to render.  Memoized like
-`crate--deps', keyed by database path with a :failed sentinel."
+`crate-dependents-limit' rows."
   (car (crate--dependents-data name)))
 
 (defun crate--dependents-truncated-p (name)
@@ -785,12 +671,9 @@ one button per dependent costs 1.3 s to render.  Memoized like
 
 (defun crate--dependents-data (name)
   "Return the (NAMES . TRUNCATED) pair that describes the dependents of NAME.
-NAMES holds at most `crate-dependents-limit' names, and TRUNCATED
-is non-nil when more crates depend on NAME.  The query asks for
-one name past the limit, so it does not pay for a count it never
-shows.  Caches (nil . nil) for a crate that nothing depends on,
-because a nil answer would make `with-memoization' re-query on
-every call."
+TRUNCATED is non-nil when more crates depend on NAME than NAMES
+lists.  A crate that nothing depends on caches `(nil . nil)', which
+survives the `or' of `with-memoization'."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (let ((cached
            (with-memoization
@@ -830,48 +713,42 @@ every call."
 
 (defface crate-name-face
   '((t :inherit (package-name bold) :height 1.2))
-  "Face for the crate name in `crate-mode' detail buffers.
-Inherits from `package-name' when available, otherwise `bold'."
+  "Face for the crate name."
   :group 'crate)
 
 (defface crate-url
   '((t :inherit link))
-  "Face for URLs in `crate-mode' detail buffers."
+  "Face for URLs."
   :group 'crate)
 
 (defface crate-date
   '((t :inherit marginalia-date))
-  "Face for update dates in `crate-mode' detail buffers.
-Inherits from `marginalia-date' when available."
+  "Face for update dates."
   :group 'crate)
 
 (defface crate-id
   '((t :inherit marginalia-number))
-  "Face for crate ID numbers in `crate-mode' detail buffers.
-Inherits from `marginalia-number' when available."
+  "Face for ID numbers."
   :group 'crate)
 
 (defface crate-version
   '((t :inherit (shadow)))
-  "Face for crate versions in `crate-mode' detail buffers."
+  "Face for versions."
   :group 'crate)
 
 (defface crate-license
   '((t :inherit (shadow)))
-  "Face for crate license values in `crate-mode' detail buffers."
+  "Face for licenses."
   :group 'crate)
 
 (defface crate-description
   '((t :inherit (package-description default)))
-  "Face for descriptions in `crate-browse-mode'.
-Inherits from `package-description' when available."
+  "Face for descriptions."
   :group 'crate)
 
 (defface crate-field-label
   '((t :inherit font-lock-variable-name-face))
-  "Face for the label of a field line in `crate-mode' detail buffers.
-A label carries a trailing colon and no section heading face, so a
-reader tells a field from a foldable section at a glance."
+  "Face for a field label."
   :group 'crate)
 
 (defvar crate-font-lock-keywords
@@ -939,9 +816,8 @@ reader tells a field from a foldable section at a glance."
 
 (defvar-keymap crate-link-map
   :doc "Keymap of a text button link.
-Every key comes from `button-map', except TAB: a dependency row is a
-line of the Dependencies section, so TAB folds that section instead
-of moving to the next link."
+TAB folds the section of point instead of moving to the next
+link."
   :parent button-map
   "TAB" #'magit-section-toggle)
 
@@ -964,9 +840,8 @@ of moving to the next link."
 
 (defun crate--line-record (position)
   "Return a record of the line at POSITION, or nil.
-The record names the section at POSITION, the number of lines from
-the start of that section and the column.  A line without a
-section holds no place to keep, so it has no record."
+A line without a section holds no place to keep, so it has no
+record."
   (when-let* ((section (magit-section-at position)))
     (cons section
           (list (- (line-number-at-pos position)
@@ -977,10 +852,8 @@ section holds no place to keep, so it has no record."
 
 (defun crate--window-records ()
   "Return a record of the buffer point and of the point of each window.
-Each record is a cons of a window and the record of its point.  The
-first cons carries nil in place of a window, because the buffer
-point needs a record of its own: a buffer can show in no window
-while a user waits for the buffer to load."
+The first record carries nil in place of a window, because a buffer
+can show in no window."
   (cons (cons nil (crate--line-record (point)))
         (mapcar (lambda (window)
                   (cons window (crate--line-record (window-point window))))
@@ -989,26 +862,20 @@ while a user waits for the buffer to load."
 (defun crate--restore-record (record)
   "Move point to the line that RECORD names.
 A record of a section that the render dropped leaves point at the
-start of the buffer.  A nil RECORD leaves point alone: the line
-then holds no place to keep."
+start of the buffer."
   (pcase-let ((`(,section . (,line ,column)) record))
     (when section
       (unless (magit-section-goto-successor section line column)
         (goto-char (point-min))))))
 
 (defun crate--goto-start ()
-  "Move the buffer point and every window point to the start of the buffer.
-A render of a buffer that held no text keeps no line, so this
-function puts a first render at the top instead of at the end of
-the text that the render inserted."
+  "Move the buffer point and every window point to the start of the buffer."
   (goto-char (point-min))
   (dolist (window (get-buffer-window-list (current-buffer) nil t))
     (set-window-point window (point-min))))
 
 (defun crate--restore-window-records (records)
-  "Move the point of the buffer and of every window of RECORDS.
-A window whose line is gone shows the start of the buffer, and a
-dead window stays alone."
+  "Move the point of the buffer and of every window of RECORDS."
   (dolist (record records)
     (let ((window (car record)))
       (cond
@@ -1048,23 +915,21 @@ dead window stays alone."
 (defun crate--child-count (count)
   "Return COUNT for a section heading, or nil.
 A section without a child and a reader that turns
-`magit-section-show-child-count' off both get nil, so no heading
-carries a zero."
+`magit-section-show-child-count' off both get nil."
   (declare (side-effect-free t))
   (and (> count 0) magit-section-show-child-count count))
 
 (defun crate--module-count (items)
   "Return the number of sections that ITEMS inserts.
-An item named `:null' is a use import and starts no section, so it
-does not count."
+An item named `:null' is a use import and starts no section."
   (declare (side-effect-free t))
   (crate--child-count
    (cl-count-if-not (lambda (item) (eq (car item) :null)) items)))
 
 (defun crate-insert-field (key label)
   "Insert the section of the field KEY, labelled LABEL.
-KEY names a column of the `crates' table.  The section carries KEY
-as its value, so a render keeps point on the field."
+The section carries KEY as its value, so a render keeps point on
+the field."
   (magit-insert-section (crate-field key)
     (insert (format crate--field-label-format (concat label ":")))
     (pcase key
@@ -1090,11 +955,7 @@ Nothing follows the label when the value is nil or a JSON null."
 
 (defun crate--insert-repository ()
   "Insert the repository URL and select its local checkout.
-`crate-repository-directory' maps the URL to a directory, and a
-directory that exists becomes the `default-directory' of the
-buffer, so a command that starts in a detail buffer starts in the
-checkout.  A local crate makes its own directory the
-`default-directory'."
+A local crate makes its own directory the `default-directory'."
   (crate--insert-value "repository")
   (if crate-local-path
       (setq-local default-directory (file-name-as-directory crate-local-path))
@@ -1105,9 +966,7 @@ checkout.  A local crate makes its own directory the
         (setq-local default-directory dir)))))
 
 (defun crate--repository-directory (repo)
-  "Return the local checkout directory of REPO, or nil.
-`crate-repository-directory' holds a base directory or a function
-that receives REPO, and nil turns the mapping off."
+  "Return the local checkout directory of REPO, or nil."
   (declare (side-effect-free t))
   (cond
    ((functionp crate-repository-directory)
@@ -1118,9 +977,7 @@ that receives REPO, and nil turns the mapping off."
                       crate-repository-directory))))
 
 (defun crate--insert-documentation ()
-  "Insert the documentation URL, or a link to the docs.rs page.
-The fallback builds the docs.rs URL from the published name of the
-crate, so a crate without a documentation column still links."
+  "Insert the documentation URL, or a link to the docs.rs page."
   (let ((doc (gethash "documentation" crate-data)))
     (if (and doc (not (eq doc :null)))
         (insert doc)
@@ -1139,20 +996,16 @@ crate, so a crate without a documentation column still links."
     (crate-insert-field (car field) (cdr field))))
 
 (defun crate--dependencies ()
-  "Return the dependency rows of the current crate.
-A local crate carries its rows in `crate-data', which
-`cargo metadata' filled, and a crates.io crate reads them from the
-database."
+  "Return the dependency rows of the current crate."
   (if crate-local-path
       (gethash "dependencies" crate-data)
     (crate--deps crate-name)))
 
 (defun crate--dependency-target (dep local)
   "Return the version or the source column of dependency row DEP.
-LOCAL non-nil means the row comes from `cargo metadata', so a
-registry dependency reads like a Cargo.toml line and a path or a
-git dependency shows the table that names its origin.  A database
-row keeps its bare requirement."
+A LOCAL row comes from `cargo metadata', so a registry dependency
+reads like a Cargo.toml line and a path or a git dependency shows
+the table that names its origin."
   (declare (pure t) (side-effect-free t))
   (if-let* ((source (nth 4 dep)))
       (format "{ %s = \"%s\" }" (car source) (cdr source))
@@ -1161,8 +1014,7 @@ row keeps its bare requirement."
       (or (nth 1 dep) ""))))
 
 (defun crate--dependency-note (dep)
-  "Return the kind and optional note of dependency row DEP.
-A normal, required dependency carries no note."
+  "Return the kind and optional note of dependency row DEP."
   (declare (pure t) (side-effect-free t))
   (concat (when-let* ((kind (nth 2 dep))
                       ((not (equal kind "normal"))))
@@ -1197,7 +1049,7 @@ A normal, required dependency carries no note."
 (defun crate-insert-dependents ()
   "Insert the Dependents section of the current crate.
 The heading marks a list that `crate-dependents-limit' cut with a
-plus sign, so a reader does not mistake it for the whole list."
+plus sign."
   (when-let* ((dependents (crate--dependents crate-name)))
     (insert "\n")
     (magit-insert-section (crate-dependents)
@@ -1221,12 +1073,9 @@ plus sign, so a reader does not mistake it for the whole list."
 
 (defun crate-insert-modules ()
   "Insert the Modules section of the current crate.
-The section holds a nested section per module and item once the
-rustdoc JSON is ready, and one status line otherwise.  It appears
-only when `crate-doc--json' answers, a build runs, or a build
-failed, so a crate with `crate-doc-enable' nil shows no section.
-A local crate started by `crate-visit-directory' shows no section
-either, because no rustdoc build feeds it yet."
+It appears only when `crate-doc--json' answers, a build runs, or a
+build failed.  A local crate shows no section, because no rustdoc
+build feeds it yet."
   (unless crate-local-path
     (let* ((json (crate-doc--json crate-name))
            (tree (and json (crate-doc--module-tree json)))
@@ -1247,9 +1096,8 @@ either, because no rustdoc build feeds it yet."
 
 (defun crate-insert-module-items (items depth path)
   "Insert ITEMS of the module tree at DEPTH, inside the module PATH.
-ITEMS comes from `crate-doc--module-tree'.  Each item becomes a
-section whose value is its full path, so the fold of a module and
-the line of point survive a render."
+Each item becomes a section whose value is its full path, so the
+fold of a module and the line of point survive a render."
   (dolist (item items)
     (let ((name (car item))
           (kind (cadr item))
@@ -1274,16 +1122,13 @@ the line of point survive a render."
 
 (defun crate--thing-at-point-url ()
   "Return the crates.io URL for a dependency crate name at point.
-Used as a `thing-at-point-provider-alist' entry for `crate-mode'
-so `thing-at-point \\='url' (and `browse-url-at-point') treat a
-dependency crate name as a link to its crates.io page.  Returns nil
-unless point is on text carrying a `crate-url' property."
+Serves as a `thing-at-point-provider-alist' entry for `crate-mode'.
+Returns nil unless point is on text carrying a `crate-url'
+property."
   (get-text-property (point) 'crate-url))
 
 (defvar-keymap crate-mode-map
-  :doc "Keymap for `crate-mode'.
-The fold keys, the section motions and the visibility levels come
-from `magit-section-mode-map', so they answer like a Magit buffer."
+  :doc "Keymap for `crate-mode'."
   :parent magit-section-mode-map
   "RET" #'push-button
   "w" #'crate-copy-dependency)
@@ -1292,17 +1137,10 @@ from `magit-section-mode-map', so they answer like a Magit buffer."
   "Major mode for displaying Rust crate details.
 
 \\{crate-mode-map}
-This mode is not intended to be invoked directly; use
-`find-crate' for a crates.io crate and `crate-visit-directory'
-for a local directory that holds a `Cargo.toml'.  The buffer
-content is inserted by `crate--render' after the mode is set up.
-
-The buffer is a tree of sections, so it reads and folds like a
-Magit buffer: \\[magit-section-toggle] folds the section at point,
-`n' and `p' move between sections, `^' goes to the parent section
-and `1' to `4' show that many levels.  \\[push-button] follows the
-link at point, which is a dependency crate name or a URL.
-`crate-detail-sections-hook' decides which sections appear."
+Do not invoke this mode directly.  Use `find-crate' for a crates.io
+crate and `crate-visit-directory' for a local directory that holds
+a `Cargo.toml'.  `crate--render' inserts the buffer content after
+the mode is set up."
   :interactive nil
   (setq-local font-lock-defaults '(crate-font-lock-keywords))
   ;; See the comment above `crate-insert-field': a marker per section
@@ -1326,9 +1164,7 @@ link at point, which is a dependency crate name or a URL.
 
 (defun crate--revert (&optional _ignore-auto _noconfirm _preserve-modes)
   "Re-render the current crate buffer.
-`revert-buffer-function' for `crate-mode'.  Re-renders from the
-live `crate-name' / `crate-data' buffer-locals so `g' works.  A
-local crate reads its `Cargo.toml' again first, so `g' shows an
+A local crate reads its `Cargo.toml' again first, so `g' shows an
 edited description or dependency list."
   (when crate-local-path
     (crate-local--forget crate-local-path)
@@ -1338,15 +1174,9 @@ edited description or dependency list."
 
 (defun crate--render ()
   "Render the current crate detail buffer.
-Inserts one section per entry of `crate-detail-sections-hook'.
 Erases existing content first, so re-rendering is idempotent.
-Keeps point on the line that it was on before the render, by the
-section of that line, and keeps its column.  Every other window
-that shows the buffer keeps the line of its own point too.  A
-folded section stays folded, because `magit-section' keeps the
-visibility of a section by its value.
-A buffer that held no text has no line to keep, so a first render
-leaves point and every window point at the start of the buffer."
+Keeps point, its column and the point of every window on the same
+line, by the section of that line, and keeps the folds."
   ;; The records come before the erase, because the erase removes the
   ;; text that both the sections and the window points point into.
   (let* ((fresh (= (point-min) (point-max)))
@@ -1381,24 +1211,18 @@ must match literally."
   (string-replace "_" "\\_" s))
 
 (defconst crate--match-names-sql
-  "SELECT name FROM crates WHERE name LIKE ? ESCAPE '\\' ORDER BY name"
-  "Prefix query over published crate names.")
+  "SELECT name FROM crates WHERE name LIKE ? ESCAPE '\\' ORDER BY name")
 
 (defun crate--match-names (prefix)
   "Return published crate names starting with PREFIX.
-Queries SQLite per call — no full name list materializes, so
-completion scales to a full crates.io dump.  The prefix pattern
-matches the collection contract (`complete-with-action'
-prefix-filters each query); completion styles query with their own
-strings and filter further on top.  Wildcards in PREFIX are
-escaped via `crate--sql-like-escape'.
+Queries SQLite per call, so no full name list materializes.
 
 The connection turns on `case_sensitive_like'.  `LIKE' compares
 case-insensitively by default, which keeps SQLite off the `name'
 primary-key btree: `EXPLAIN QUERY PLAN' answers `SCAN crates', and
 one keystroke costs 50 ms.  Stored names are all lowercase, so a
 case-sensitive LIKE over a downcased PREFIX walks the btree
-instead, and `crate-completion-limit' stops the walk early: 0.03 ms."
+instead: 0.03 ms."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (condition-case nil
         (let ((db (sqlite-open crate-data-path))
@@ -1438,9 +1262,7 @@ ACTION."
      (complete-with-action action (crate--match-names string) string predicate))))
 
 (defun crate-refresh-cache ()
-  "Discard cached crate data.
-The next `find-crate' or completion invocation will reload from
-the database."
+  "Discard cached crate data."
   (interactive)
   (setq crate--data-cache (make-hash-table :test 'equal)
         crate-doc--cache (make-hash-table :test 'equal)
@@ -1455,12 +1277,8 @@ the database."
 ;;;###autoload
 (defun find-crate (&optional name)
   "Display details for the Rust crate NAME in `crate-mode'.
-When called interactively, prompt for a crate name with
-completion.  If NAME is a crates.io URL, the URL prefix is
-stripped first; a trailing version path segment is dropped with a
-message naming the requested version.  Creates a new buffer named
-\"Crate: <name>\" or switches to an existing one.
-`crate-display-buffer-action' chooses the window that shows it."
+Interactively, prompt for a crate name with completion.  A
+crates.io URL loses its prefix and any trailing version path."
   (interactive)
   (let ((cand (or name
                   (completing-read "crate> " #'crate--collection))))
@@ -1497,9 +1315,8 @@ message naming the requested version.  Creates a new buffer named
 
 (defun crate-local--read-directory ()
   "Read the directory of a local crate with completion.
-`completion-file-name-table' completes the path, and the
-`file-directory-p' predicate keeps files out of the candidates,
-because a crate directory is the only answer that works."
+The `file-directory-p' predicate keeps files out of the
+candidates."
   (completing-read "Crate directory: "
                    #'completion-file-name-table
                    #'file-directory-p
@@ -1509,12 +1326,7 @@ because a crate directory is the only answer that works."
 ;;;###autoload
 (defun crate-visit-directory (&optional dir)
   "Display the Rust crate in local directory DIR in `crate-mode'.
-DIR defaults to `default-directory'.  The command reads the fields
-and the dependency list with `cargo metadata --no-deps', so
-`crate-cargo-program' must name a working cargo and DIR must hold
-a `Cargo.toml'.
-The buffer is named \"Crate: <name> (<path>)\", so a local crate
-and the published crate of the same name keep separate buffers.
+DIR defaults to `default-directory' and must hold a `Cargo.toml'.
 The buffer shows no Dependents and no Modules section for a crate
 that the database does not hold."
   (interactive (list (crate-local--read-directory)))
@@ -1542,9 +1354,7 @@ that the database does not hold."
 
 ;;;###autoload
 (defun crate-browse-url (url &rest _args)
-  "Browse a Rust crate URL by dispatching to `find-crate'.
-Intended for use as a `browse-url' handler.  The URL is passed
-directly to `find-crate', which strips the crates.io prefix."
+  "Browse a Rust crate URL by dispatching to `find-crate'."
   (find-crate url))
 
 ;;;###autoload
@@ -1560,9 +1370,8 @@ directly to `find-crate', which strips the crates.io prefix."
 
 (defun crate--bookmark-make-record-function ()
   "Create a bookmark record for the current crate buffer.
-Intended for use as `bookmark-make-record-function'.  A local
-crate records its directory, so the handler reopens that checkout
-and not the published crate of the same name."
+A local crate records its directory, so the handler reopens that
+checkout and not the published crate of the same name."
   (let ((label (if crate-local-path
                    (format "Rust Crate: %s (%s)" crate-name crate-local-path)
                  (concat "Rust Crate: " crate-name))))
@@ -1577,8 +1386,8 @@ and not the published crate of the same name."
 ;;;###autoload
 (defun crate-bookmark-jump (bm)
   "Restore a crate bookmark BM.
-Called by the bookmark system.  A record with a directory goes to
-`crate-visit-directory' and every other record to `find-crate'."
+A record with a directory goes to `crate-visit-directory' and
+every other record to `find-crate'."
   (interactive (list (read-from-minibuffer "Bookmark: ")))
   (let ((dir (bookmark-prop-get bm 'directory)))
     (if dir
@@ -1627,17 +1436,6 @@ Called by the bookmark system.  A record with a directory goes to
   "Major mode for browsing Rust crates in a sortable table.
 
 \\{crate-browse-mode-map}
-\\<crate-browse-mode-map>
-\\[crate-browse-visit] on an entry to view full details,
-\\[crate-browse-open-other-window] to view them in another window,
-\\[crate-browse-search-url] to open on crates.io,
-\[browse-url-at-point] to open the crates.io page of the row at point,
-\\[crate-browse-widen-column] and \\[crate-browse-narrow-column] to
-resize a column,
-\\[revert-buffer] to reload the data.
-The `e' prefix exports the visible rows: \\[crate-browse-export-cargo]
-and \\[crate-browse-export-markdown].
-
 The table shrinks its columns when the window is narrow."
   :interactive nil
   (setq tabulated-list-format
@@ -1664,8 +1462,7 @@ The table shrinks its columns when the window is narrow."
               #'crate-browse--bookmark-make-record))
 
 (defvar-local crate-browse--name-list nil
-  "Buffer-local list of crate names that the browse buffer is filtered to.
-When nil, all crates are shown.")
+  "Buffer-local list of crate names that the browse buffer is filtered to.")
 (put 'crate-browse--name-list 'permanent-local t)
 
 (defvar-local crate-browse--name-prefix nil
@@ -1674,17 +1471,13 @@ When nil, all crates are shown.")
 
 (defvar-local crate-browse--declared-widths nil
   "Column widths that `crate-browse-mode' declares.
-Neither a window fit nor a bookmark changes this list, so it stays
-the source for the width function.")
+Neither a window fit nor a bookmark changes this list.")
 
 (defvar-local crate-browse--canonical-widths nil
   "Column widths that a window fit starts from.
-A fit starts here, so a wide window gets the declared widths back
-and a manual resize is undone by the next fit.  A bookmark may
-replace it with the widths that it saved.")
+A bookmark may replace it with the widths that it saved.")
 
-(defvar-local crate-browse--fit-timer nil
-  "Pending timer that refits this table after a window size change.")
+(defvar-local crate-browse--fit-timer nil)
 
 (defconst crate--version-re
   "\\`\\([0-9]+\\)\\(?:\\.\\([0-9]+\\)\\)?\\(?:\\.\\([0-9]+\\)\\)?\\(?:-\\([^+]+\\)\\)?\\(?:\\+.*\\)?\\'"
@@ -1694,11 +1487,10 @@ publish a two-segment version such as \"0.1\".")
 
 (defun crate--version-parts (version)
   "Return VERSION as (MAJOR MINOR PATCH PRE), or nil if it is no semver.
-MAJOR, MINOR and PATCH are integers, and a missing segment counts
-as 0, so \"0.1\" reads as 0.1.0.  PRE is nil for a release, or a
-list of pre-release identifiers, each an integer or a string.  The
-build metadata after a plus sign does not affect precedence, so it
-is dropped."
+A missing segment counts as 0, so \"0.1\" reads as 0.1.0.  PRE is
+nil for a release, or a list of pre-release identifiers.  Build
+metadata after a plus sign does not affect precedence, so it is
+dropped."
   (declare (pure t) (side-effect-free t))
   (when (and (stringp version)
              (string-match crate--version-re version))
@@ -1714,8 +1506,7 @@ is dropped."
 
 (defun crate--semver-identifier-lessp (a b)
   "Return non-nil when pre-release identifier A sorts before B.
-A numeric identifier sorts before an alphanumeric one, and two
-numeric identifiers compare as numbers."
+A numeric identifier sorts before an alphanumeric one."
   (declare (pure t) (side-effect-free t))
   (cond ((and (integerp a) (integerp b)) (< a b))
         ((integerp a) t)
@@ -1724,9 +1515,8 @@ numeric identifiers compare as numbers."
 
 (defun crate--semver-pre-lessp (a b)
   "Return non-nil when pre-release list A sorts before list B.
-A numeric identifier sorts before an alphanumeric one, and a list
-that prefixes a longer list sorts first, so \"alpha\" comes before
-\"alpha.1\"."
+A list that prefixes a longer list sorts first, so \"alpha\" comes
+before \"alpha.1\"."
   (declare (pure t) (side-effect-free t))
   (cond ((null a) t)
         ((null b) nil)
@@ -1737,9 +1527,8 @@ that prefixes a longer list sorts first, so \"alpha\" comes before
 (defun crate--version-lessp (a b)
   "Return non-nil when version string A sorts before version string B.
 Compare as semver, so \"1.9.0\" sorts before \"1.10.0\" and
-\"1.0.0-rc.1\" before \"1.0.0\".  `version<' rejects a pre-release,
-so it cannot do this job.  A value that is no semver falls back to
-`string<', and an empty value sorts last."
+\"1.0.0-rc.1\" before \"1.0.0\".  A value that is no semver falls
+back to `string<', and an empty value sorts last."
   (declare (pure t) (side-effect-free t))
   (let ((a-parts (crate--version-parts a))
         (b-parts (crate--version-parts b)))
@@ -1769,9 +1558,8 @@ A cell holds a string or a cons of a label and button properties."
 
 (defun crate-browse--version-lessp (a b)
   "Return non-nil when `tabulated-list' entry A sorts before B.
-A and B are `tabulated-list-entries' entries.  The Version column
-compares semvers rather than the strings it prints, so \"1.9\"
-lands before \"1.10\".  An entry without a version sorts last."
+The Version column compares semvers rather than the strings it
+prints."
   (declare (side-effect-free t))
   (crate--version-lessp (crate-browse--cell-text (aref (cadr a) 1))
                         (crate-browse--cell-text (aref (cadr b) 1))))
@@ -1792,17 +1580,15 @@ lands before \"1.10\".  An entry without a version sorts last."
                               'face 'crate-description)))))
 
 (defun crate-browse--entry-less (a b)
-  "Return non-nil if tabulated-list entry A sorts before B by name.
-A and B are `tabulated-list-entries' entries whose car is the crate
-name.  Used to make the browse display order deterministic."
+  "Return non-nil if tabulated-list entry A sorts before B by name."
   (declare (side-effect-free t))
   (string< (car a) (car b)))
 
 (defun crate-browse--entries (&optional name-list)
   "Generate `tabulated-list-entries' for all crates.
 When NAME-LIST is non-nil, only include entries whose names
-appear in the list.  The entries are sorted by name so the
-initial display is deterministic (hash iteration order is not)."
+appear in the list.  The entries are sorted by name, because hash
+iteration order is not."
   (let ((items (crate--list))
         entries)
     (when items
@@ -1826,12 +1612,8 @@ initial display is deterministic (hash iteration order is not)."
 
 (defun crate-browse--thing-at-point-url ()
   "Return the crates.io URL of the table row at point.
-Used as a `thing-at-point-provider-alist' entry for
-`crate-browse-mode', so `thing-at-point \='url' and
-`browse-url-at-point' treat any cell of a row as a link to the
-crates.io page of its crate.  The name cell carries the `crate-url'
-property, and every other cell answers through the entry ID of the
-row."
+Serves as a `thing-at-point-provider-alist' entry for
+`crate-browse-mode'."
   (declare (side-effect-free t))
   (or (crate--thing-at-point-url)
       (when-let* ((name (tabulated-list-get-id)))
@@ -1840,15 +1622,12 @@ row."
 ;;; Mouse and context menu
 
 (defconst crate-browse--mouse-help
-  "mouse-2: open in another window, mouse-3: menu"
-  "Help text that every browse table row carries.")
+  "mouse-2: open in another window, mouse-3: menu")
 
 (defun crate-browse--print-entry (id columns)
   "Print one table row for ID and COLUMNS, then add its mouse help.
-`tabulated-list-print' calls this through `tabulated-list-printer'
-for every entry, so a line without an entry stays plain.  The whole
-row explains the mouse, and the name cell carries `mouse-face', so
-the pointer highlights the name alone."
+The whole row explains the mouse, and the name cell carries
+`mouse-face'."
   (let ((beg (point)))
     (tabulated-list-print-entry id columns)
     (when id
@@ -1865,14 +1644,13 @@ the pointer highlights the name alone."
   "Return nil, so one click selects a row and follows no link.
 `tabulated-list-mode-map' binds `follow-link' to `mouse-face', and
 that value turns a click on a marked cell into a `mouse-2' event.
-The name cell carries `mouse-face', so this predicate keeps the
-click from opening a detail buffer.  The middle button opens one."
+The middle button opens a detail buffer."
   nil)
 
 (defun crate-browse--context-command (position buffer function)
   "Return a command that moves point to POSITION in BUFFER, then calls FUNCTION.
 A context menu click leaves point alone, and the menu command can
-run in another buffer, so the command restores both first."
+run in another buffer."
   (lambda ()
     (interactive)
     (when (buffer-live-p buffer)
@@ -1883,9 +1661,7 @@ run in another buffer, so the command restores both first."
 
 (defun crate-browse--context-menu (menu click)
   "Fill MENU with the table commands for the row under CLICK.
-A click below the last row adds nothing, so the plain Emacs menu
-stays.  `crate-browse-mode' adds this function to
-`context-menu-functions' buffer-locally."
+A click below the last row adds nothing."
   (let* ((position (posn-point (event-start click)))
          (buffer (current-buffer))
          (name (crate-browse--name-at-event click)))
@@ -1946,8 +1722,7 @@ copy a column before it changes."
                     widths)))
 
 (defun crate-browse--longest-cell (entries column)
-  "Return the width of the widest cell of ENTRIES in COLUMN.
-ENTRIES has the shape of `tabulated-list-entries'."
+  "Return the width of the widest cell of ENTRIES in COLUMN."
   (declare (pure t) (side-effect-free t))
   (let ((longest 0))
     (dolist (entry entries longest)
@@ -1958,9 +1733,7 @@ ENTRIES has the shape of `tabulated-list-entries'."
 
 (defun crate-browse--content-widths (entries)
   "Return the declared widths with the Version column sized to ENTRIES.
-The column grows to the longest visible version, capped by
-`crate-browse-version-max-width'.  The header label is the floor,
-so the label never truncates."
+The header label is the floor, so the label never truncates."
   (declare (side-effect-free t))
   (let* ((widths (append (or crate-browse--declared-widths
                              (crate-browse--column-widths))
@@ -1979,11 +1752,9 @@ so the label never truncates."
 
 (defun crate-browse--fit-widths (widths budget)
   "Return WIDTHS shrunk to fit BUDGET columns.
-WIDTHS holds one width per column, and the last column takes the
-remaining space, so `crate-browse-description-min-width' bounds its
-share.  A column before the last shrinks to 8, and the Crate column
-stops at `crate-browse-name-min-width'.  The result keeps every
-value when the columns already fit."
+The last column takes the remaining space, and the columns before
+it give way: a middle column shrinks to 8 and the Crate column to
+`crate-browse-name-min-width'."
   (declare (side-effect-free t))
   (let* ((last (1- (length widths)))
          (fitted (append widths nil))
@@ -2009,9 +1780,7 @@ value when the columns already fit."
 
 (defun crate-browse--fit (window)
   "Return a `tabulated-list-format' that fits WINDOW, or nil.
-The fit starts from `crate-browse--canonical-widths', so a resize
-in either direction reaches the right widths.  Return nil when the
-current widths already equal the fitted ones."
+Answers nil when the current widths already fit."
   (declare (side-effect-free t))
   (when (and (windowp window) crate-browse--canonical-widths)
     (let* ((current (crate-browse--column-widths))
@@ -2023,8 +1792,7 @@ current widths already equal the fitted ones."
 (defun crate-browse--fit-format ()
   "Fit the columns to the window that shows this buffer, without a reprint.
 The browse command runs this before its first print, because that
-print lands in the selected window.  The fit also refreshes the
-base widths, so the Version column follows the visible rows."
+print lands in the selected window."
   (setq-local crate-browse--canonical-widths (crate-browse--base-widths))
   (when-let* ((fitted (crate-browse--fit (or (get-buffer-window nil t)
                                              (selected-window)))))
@@ -2052,8 +1820,7 @@ base widths, so the Version column follows the visible rows."
 (defun crate-browse--schedule-refit (buffer window)
   "Refit BUFFER for WINDOW after the current redisplay.
 Redisplay runs the window size hook, so the reprint waits for a
-timer.  One pending timer per buffer is enough.  A table larger
-than `crate-browse-refit-max-entries' keeps its widths."
+timer.  One pending timer per buffer is enough."
   (when (and (buffer-live-p buffer)
              (not (timerp (buffer-local-value 'crate-browse--fit-timer
                                               buffer)))
@@ -2069,9 +1836,7 @@ than `crate-browse-refit-max-entries' keeps its widths."
     (setq crate-browse--fit-timer nil)))
 
 (defun crate-browse--window-size-changed (frame)
-  "Refit the crate tables shown in the windows of FRAME.
-A size change alters the space that the last column needs, and the
-other columns give way when the window is too narrow."
+  "Refit the crate tables shown in the windows of FRAME."
   (dolist (window (window-list frame 'nomini))
     (when (buffer-local-value 'crate-browse--canonical-widths
                               (window-buffer window))
@@ -2132,8 +1897,8 @@ other columns give way when the window is too narrow."
 
 (defun crate-browse--rows ()
   "Return the rows of the current table buffer in display order.
-Each row is a cons of its entry ID and its column vector.  A line
-without an entry adds no row."
+Each row is a cons of its entry ID and its column vector, and a
+line without an entry adds no row."
   (save-excursion
     (goto-char (point-min))
     (let (rows)
@@ -2145,7 +1910,6 @@ without an entry adds no row."
 
 (defun crate-browse--export-cell (cell)
   "Return table CELL as plain text on one line.
-A cell holds a string or a cons of a label and button properties.
 The face of a cell goes away with the properties."
   (declare (pure t) (side-effect-free t))
   (string-trim
@@ -2155,9 +1919,7 @@ The face of a cell goes away with the properties."
 
 (defun crate-browse--export-markdown (rows)
   "Return ROWS as a Markdown table.
-ROWS comes from `crate-browse--rows'.  The header names the columns
-of `tabulated-list-format'.  A pipe inside a cell is escaped, so
-the table keeps its shape."
+The header names the columns of `tabulated-list-format'."
   (declare (side-effect-free t))
   (let* ((labels (mapcar (lambda (column) (car column))
                          (append tabulated-list-format nil)))
@@ -2182,9 +1944,7 @@ the table keeps its shape."
             "\n")))
 
 (defun crate-browse--export-cargo (rows)
-  "Return ROWS as `Cargo.toml' dependency lines.
-The lines read the Version cell of each row, so the export follows
-the visible data."
+  "Return ROWS as `Cargo.toml' dependency lines."
   (declare (pure t) (side-effect-free t))
   (if (null rows)
       ""
@@ -2196,8 +1956,7 @@ the visible data."
             "\n")))
 
 (defun crate-browse--export-buffer (label text)
-  "Show the export LABEL with TEXT in a read-only buffer.
-A repeat export of the same format reuses the buffer."
+  "Show the export LABEL with TEXT in a read-only buffer."
   (let ((buffer (get-buffer-create (format "*Crates export: %s*" label))))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
@@ -2210,8 +1969,7 @@ A repeat export of the same format reuses the buffer."
 
 (defun crate-browse-export-cargo ()
   "Export the visible table rows as `Cargo.toml' dependency lines.
-The export follows the current sort and the filter.  Paste the
-block into a `[dependencies]' section."
+The export follows the current sort and the filter."
   (interactive)
   (unless (derived-mode-p 'crate-browse-mode)
     (user-error "Not a crate table buffer"))
@@ -2232,9 +1990,7 @@ The export follows the current sort and the filter."
 (defun crate-browse--reload ()
   "Rebuild `tabulated-list-entries' from the buffer-local filter.
 The `tabulated-list-revert-hook' of a browse buffer calls this, so
-`revert-buffer' (`g') keeps the filter.  `crate-browse-crates'
-calls it before the first print.  The content widths follow the new
-entries, so a reload never leaves a stale Version column."
+`revert-buffer' (`g') keeps the filter."
   (setq tabulated-list-entries
         (crate-browse--entries crate-browse--name-list))
   (crate-browse--fit-format))
@@ -2265,9 +2021,7 @@ NAME-PREFIX matches as a substring (not a prefix)."
 (defun crate-browse--restore-state (bookmark)
   "Restore the sort key and column widths that BOOKMARK holds.
 A sort key that names no column and a width list that does not
-match the table are ignored, so an old bookmark still opens.
-Restoring a saved width makes it the width that a later fit starts
-from.  The table reprints only when a value lands."
+match the table are ignored, so an old bookmark still opens."
   (let ((sort-key (alist-get 'sort-key bookmark))
         (widths (alist-get 'widths bookmark))
         (columns (append tabulated-list-format nil))
@@ -2290,8 +2044,7 @@ from.  The table reprints only when a value lands."
 
 (defun crate-browse--bookmark-jump (bookmark)
   "Restore a crate browse BOOKMARK.
-Re-derives the filtered name-list from the live cache so newly
-added crates appear on reopen."
+The filtered name-list is re-derived from the live cache."
   (let ((name-prefix (bookmark-prop-get bookmark 'name-prefix))
         name-list)
     (when name-prefix
@@ -2302,11 +2055,8 @@ added crates appear on reopen."
 ;;;###autoload
 (defun crate-browse-crates (&optional name-list name-prefix)
   "Display Rust crates in a browseable table.
-When NAME-LIST is non-nil (a list of names), only those crates
-are displayed.  This is used by Embark export.
-
-When NAME-PREFIX is non-nil, the buffer name gets the form
-\"*Crates: serde*\", allowing multiple searches to coexist
+NAME-LIST restricts the table to the listed crates.  NAME-PREFIX
+names the buffer \"*Crates: serde*\", so several searches coexist
 in separate buffers."
   (interactive)
   (let* ((buf-name (if name-prefix
@@ -2326,8 +2076,7 @@ in separate buffers."
 
 (defun crate--dependency-line (name version)
   "Return a `Cargo.toml' dependency line for crate NAME at VERSION.
-VERSION is the published version string, or nil, `:null' or an
-empty string when the version is unknown, which becomes \"*\"."
+A nil, `:null' or empty VERSION becomes \"*\"."
   (declare (pure t) (side-effect-free t))
   (format "%s = \"%s\"" name
           (if (and (stringp version) (not (string-empty-p version)))
@@ -2336,11 +2085,9 @@ empty string when the version is unknown, which becomes \"*\"."
 
 (defun crate-copy-dependency (&optional name)
   "Copy a Cargo.toml dependency line for crate NAME to the `kill-ring'.
-The line has the form NAME = \"VERSION\", ready to paste into a
-`[dependencies]' section.  When the version cannot be determined,
-it falls back to \"*\".  Interactively, NAME is the current crate
-in `crate-mode' or the entry at point in `crate-browse-mode';
-Embark passes its candidate directly."
+The line has the form NAME = \"VERSION\" and falls back to \"*\" when
+the version is unknown.  Interactively, NAME is the current crate
+in `crate-mode' or the entry at point in `crate-browse-mode'."
   (interactive)
   (let* ((name (or name
                    (cond
@@ -2362,26 +2109,22 @@ Embark passes its candidate directly."
 
 (defcustom crate-cargo-toml-modes '(toml-mode toml-ts-mode)
   "Major modes treated as `Cargo.toml' for crate-name completion.
-The modes themselves stay external — crate.el never hard-requires
-a TOML mode; this list is how `crate-cargo-completion-at-point'
-recognizes compatible buffers."
+crate.el never hard-requires a TOML mode."
   :type '(repeat symbol)
   :group 'crate)
 
 (defun crate--cargo-in-dependencies-p ()
   "Return non-nil if point is inside a dependency section.
-Recognizes the flat `[dependencies]', `[dev-dependencies]', and
-`[build-dependencies]' headers.  Dotted `[dependencies.foo]`
-tables are excluded — the crate name is already written there."
+Recognizes the flat `[dependencies]', `[dev-dependencies]' and
+`[build-dependencies]' headers, and excludes dotted tables, where
+the crate name is already written."
   (save-excursion
     (when (re-search-backward "^\\[\\([^]]+\\)\\][[:space:]]*$" nil t)
       (member (match-string 1)
               '("dependencies" "dev-dependencies" "build-dependencies")))))
 
 (defun crate-cargo-completion-at-point ()
-  "Complete a crate name at point inside Cargo.toml dependency sections.
-Intended for `completion-at-point-functions' in the modes of
-`crate-cargo-toml-modes' (see `crate-install-cargo-toml-capf')."
+  "Complete a crate name at point inside Cargo.toml dependency sections."
   (when (and (memq major-mode crate-cargo-toml-modes)
              (crate--cargo-in-dependencies-p))
     (let ((end (point)) start)
@@ -2394,8 +2137,8 @@ Intended for `completion-at-point-functions' in the modes of
 ;;;###autoload
 (defun crate-install-cargo-toml-capf ()
   "Enable crate-name completion in `Cargo.toml' dependency sections.
-Registers `crate-cargo-completion-at-point' globally; the function
-itself stays silent outside TOML modes and dependency sections."
+The function stays silent outside TOML modes and dependency
+sections."
   (interactive)
   (add-hook 'completion-at-point-functions
             #'crate-cargo-completion-at-point))
@@ -2409,9 +2152,8 @@ itself stays silent outside TOML modes and dependency sections."
 
 (defun crate--embark-export (candidates)
   "Export crate CANDIDATES for Embark.
-Opens a `crate-browse-mode' buffer filtered to CANDIDATES.
-Grabs the minibuffer search term as the name-prefix so bookmarks
-can re-derive results from the live cache."
+The minibuffer search term becomes the name-prefix, so a bookmark
+can re-derive the results."
   (let ((name-prefix (when (minibufferp)
                        (let ((s (minibuffer-contents)))
                          (and (not (string-empty-p s)) s)))))

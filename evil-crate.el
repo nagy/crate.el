@@ -76,9 +76,8 @@
 
 (defcustom crate-evil-auto-enable t
   "Non-nil if the evil bindings load without an explicit call.
-When non-nil, `crate-evil-auto-setup' enables `crate-evil-mode' when
-evil loads.  Set this option to nil before evil loads to keep the
-bindings off until a user calls `crate-evil-mode'."
+Set this option to nil before evil loads to keep the bindings off
+until a user calls `crate-evil-mode'."
   :type 'boolean
   :group 'crate)
 
@@ -96,9 +95,7 @@ bindings off until a user calls `crate-evil-mode'."
     ([remap evil-change] . crate-evil-open-web)
     ([remap evil-yank] . crate-copy-dependency)
     ([remap evil-yank-line] . crate-copy-dependency))
-  "Keys that `crate-evil-mode' binds in detail buffers.
-A key is a key string, or a `[remap COMMAND]' vector for a command
-that evil already binds.")
+  "Keys that `crate-evil-mode' binds in detail buffers.")
 
 (defvar crate-evil-browse-keys
   '(([remap evil-ret] . crate-browse-visit)
@@ -113,16 +110,11 @@ that evil already binds.")
     ("gm" . crate-browse-export-markdown)
     ([remap evil-replace] . revert-buffer-quick)
     ([remap evil-enter-replace-state] . revert-buffer-quick))
-  "Keys that `crate-evil-mode' binds in browse buffers.
-A key is a key string, or a `[remap COMMAND]' vector for a command
-that evil already binds.  Evil leaves TAB unbound in its normal
-state, so a plain key would reach the table as well.")
+  "Keys that `crate-evil-mode' binds in browse buffers.")
 
 (defvar crate-evil-browse-visual-keys
   '(([remap evil-yank] . crate-evil-browse-copy-dependencies))
-  "Keys that `crate-evil-mode' binds in visual state of browse buffers.
-A key is a key string, or a `[remap COMMAND]' vector for a command
-that evil already binds.")
+  "Keys that `crate-evil-mode' binds in visual state of browse buffers.")
 
 (defun crate-evil-open-web ()
   "Open the crates.io page of the crate of the current buffer."
@@ -139,8 +131,7 @@ that evil already binds.")
 
 (defun crate-evil-browse-copy-dependencies (start end)
   "Copy the dependency lines of the rows between START and END.
-One line per row, in display order.  The command reads the Version
-cell of every row, so the copy follows the current data."
+One line per row, in display order."
   (interactive "r" crate-browse-mode)
   (let (lines)
     (save-excursion
@@ -179,20 +170,19 @@ cell of every row, so the copy follows the current data."
 
 (define-minor-mode crate-evil-detail-mode
   "Install the evil bindings of crate detail buffers.
-Do not enable this mode directly: enable `crate-evil-mode'."
+Enable `crate-evil-mode' instead."
   :group 'crate
   :lighter nil)
 
 (define-minor-mode crate-evil-browse-mode
   "Install the evil bindings of crate browse buffers.
-Do not enable this mode directly: enable `crate-evil-mode'."
+Enable `crate-evil-mode' instead."
   :group 'crate
   :lighter nil)
 
 (defun crate-evil--key-sequence (key)
   "Return the key sequence of KEY.
-KEY is a key string or a key vector, so a `[remap COMMAND]' entry
-passes through unchanged."
+A `[remap COMMAND]' vector passes through unchanged."
   (if (vectorp key) key (key-parse key)))
 
 (defun crate-evil--bind (state mode keys)
@@ -225,19 +215,15 @@ passes through unchanged."
 
 ;;;###autoload
 (defun crate-evil-auto-setup ()
-  "Enable `crate-evil-mode' when the option allows it.
-crate.el calls this function when evil loads, so a user who has no
-evil loads no evil code."
+  "Enable `crate-evil-mode' when the option allows it."
   (when crate-evil-auto-enable
     (crate-evil-mode 1)))
 
 ;;;###autoload
 (define-minor-mode crate-evil-mode
   "Install the evil bindings of the crate modes.
-The mode is global; it enables one local minor mode in each crate
-buffer and follows new buffers through the major mode hook.  The
-package never requires evil.  The autoloaded
-`crate-evil-auto-setup' calls this mode when evil loads."
+The mode is global: it enables one local minor mode in each crate
+buffer and follows new buffers through the major mode hook."
   :global t
   :group 'crate
   (if crate-evil-mode

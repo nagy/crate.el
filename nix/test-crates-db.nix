@@ -1,9 +1,7 @@
-# test-crates-db.nix — fixture SQLite database for crate.el tests.
+# Fixture SQLite database for crate.el tests.
 #
-# Schema mirrors the real crates-io.db produced by the crates.io
-# dumps (STRICT tables, WITHOUT ROWID on the primary key).  Tests
-# point `crate-data-path' at this file instead of the real database
-# so they never touch the network or the user's data.
+# The schema mirrors the real crates-io.db (STRICT tables, WITHOUT
+# ROWID on the primary key).  Tests point `crate-data-path' here.
 
 {
   pkgs ? import <nixpkgs> { },

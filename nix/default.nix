@@ -4,24 +4,13 @@
   emacs ? pkgs.emacs,
   emacsPackages ? emacs.pkgs,
   melpaBuild ? emacsPackages.melpaBuild,
-  # The detail buffer is a tree of `magit-section' sections, so the
-  # package declares it.
+  # Declared by the package.
   magitSection ? emacsPackages.magit-section,
-  # Optional evil layer.  The package does not depend on evil, but the
-  # build compiles evil-crate.el against it and the suite runs with it
-  # on the load path.
+  # Optional; the build compiles against it and the suite loads it.
   evil ? emacsPackages.evil,
-  # cargo, which the interactive `crate-visit-directory' command runs.
-  # The build writes its store path into the `crate-cargo-program'
-  # default, so an installed package needs no cargo on PATH.
+  # The build writes its store path into `crate-cargo-program'.
   cargo ? pkgs.cargo,
-  # Fixture SQLite database the ERT suite runs against.  Passed in
-  # explicitly so the expression has no hidden dependency on a peer
-  # file; the flake wires up nix/test-crates-db.nix.
   testCratesDb,
-  # Version string.  The flake derives it from the commit date, so the
-  # expression stays standalone-usable (nix-build nix/default.nix) with
-  # the default.
   version ? "0.1.0",
 }:
 
@@ -34,8 +23,6 @@ in
 melpaBuild {
   pname = "crate";
   inherit version;
-  # `./..' is the repo root: this expression lives in nix/ but the
-  # package sources and tests sit one level up.
   src = lib.cleanSource ./..;
 
   packageRequires = [ magitSection ];
@@ -44,26 +31,16 @@ melpaBuild {
 
   nativeBuildInputs = [ cargo ];
 
-  # `packageRequires' tells the package set what to propagate, but it
-  # does not put anything on the load path of this build, so the build
-  # and the check run through a wrapper Emacs that carries the declared
-  # dependency and the optional evil layer.  The wrapper sets
-  # `EMACSLOADPATH' itself, so it only has to come first on `PATH'.
+  # `packageRequires' decorates the package set, but puts nothing on the
+  # load path of this build, so build and check run through a wrapper
+  # Emacs that sets `EMACSLOADPATH'.
   preBuild = ''
     export PATH="${emacsWithDeps}/bin:$PATH"
   '';
 
-  # Three substitutions, all only visible inside the build:
-  # * the fixture database path, so the suite need not reach for a
-  #   hard-coded path;
-  # * the version in the package header, which must agree with the
-  #   `version' argument or `require' and package.el disagree after
-  #   installation.  The pattern spells the header default, so a bump
-  #   of `0.1.0' above changes both places;
-  # * the cargo that `crate-visit-directory' runs, so the installed
-  #   command works without a cargo on PATH.  The pattern spells the
-  #   default of `crate-cargo-program', so a change there changes the
-  #   pattern too.
+  # The fixture database path, the version header and the cargo that
+  # `crate-visit-directory' runs stay build-only, so patch them in.
+  # Each pattern spells the default it replaces.
   postPatch = ''
     substituteInPlace test/crate-test.el \
       --replace-fail '@testCratesDb@' ${testCratesDb}
@@ -77,21 +54,14 @@ melpaBuild {
   checkPhase = ''
     runHook preCheck
 
-    # Byte-compile every file with warnings as errors, test files
-    # included: `turnCompilationWarningToError' only covers the files
-    # melpaBuild installs.
+    # `turnCompilationWarningToError' covers only the installed files.
     for f in *.el test/*.el; do
       emacs --batch -L . -L test --eval '(setq byte-compile-error-on-warn t)' \
         -f batch-byte-compile "$f"
     done
 
     # Load every suite through a glob, so a new `test/<unit>-test.el'
-    # needs no edit here.  printf repeats "-l %s" per match.  failglob
-    # makes an empty glob a shell error, so the || guard fires even
-    # without `set -e'; the default returns right after, because later
-    # commands must keep default glob semantics.  The unquoted
-    # $test_args is intentional: the words must split back into
-    # -l <file> pairs.
+    # needs no edit here.
     shopt -s failglob
     test_args=$(printf -- "-l %s " test/*-test.el) || { echo 'no tests matched test/*-test.el' >&2; exit 1; }
     shopt -u failglob
