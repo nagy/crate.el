@@ -551,6 +551,7 @@ names the subset that a fresh table shows.")
   "S" #'crate-tree-reverse-sort
   "f" crate-tree-filter-map
   "y" #'crate-tree-copy-path
+  "w" #'crate-tree-copy-dependency
   "C-c C-o" #'crate-tree-browse-url)
 
 ;; Depth keys: `1' shows the root alone, and `9' shows every depth.
@@ -585,6 +586,70 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (setq-local header-line-format nil)
   (tabulated-list-init-header)
   (hl-line-mode 1))
+
+;;; Commands
+
+;;;###autoload
+(defun crate-tree (name)
+  "Show the item structure of the database crate NAME."
+  (interactive (list (completing-read "Crate tree> " #'crate--collection)))
+  (let ((record (crate--crate name)))
+    (unless record
+      (user-error "No crate `%s'" name))
+    (crate-tree--open (or (gethash "name" record) name) nil)))
+
+;;;###autoload
+(defun crate-tree-directory (directory)
+  "Show the item structure of the crate in DIRECTORY."
+  (interactive (list (crate-local--read-directory)))
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (record (progn
+                   (unless (file-exists-p (crate-local--manifest directory))
+                     (user-error "No Cargo.toml in `%s'"
+                                 (directory-file-name directory)))
+                   (crate-local--record directory))))
+    (unless record
+      (user-error "Cannot read the crate metadata of `%s'"
+                  (directory-file-name directory)))
+    (crate-tree--open (gethash "name" record) directory)))
+
+(defun crate-tree--open (name directory)
+  "Show the tree of crate NAME, whose source sits in DIRECTORY.
+A nil DIRECTORY names a database crate, which reads its document from
+the Nix build.  A buffer that already holds the tree keeps its folds,
+so a second call only displays it."
+  (let ((buffer (if directory
+                    (format "Crate Tree: %s (%s)"
+                            name (directory-file-name directory))
+                  (format "Crate Tree: %s" name))))
+    (crate--display-buffer buffer)
+    (unless (derived-mode-p 'crate-tree-mode)
+      (crate-tree-mode)
+      (setq-local crate-tree--name name)
+      (setq-local crate-tree--directory
+                  (and directory (directory-file-name directory)))
+      (if directory
+          (crate-tree--apply-json (crate-tree--json directory))
+        (setq-local crate-doc--render-function
+                    #'crate-tree--render-from-build)
+        (crate-tree--apply-json (crate-doc--json name))))
+    (current-buffer)))
+
+(defun crate-tree--render-from-build ()
+  "Reprint the tree from a finished Nix rustdoc build."
+  (crate-tree--apply-json (crate-doc--json crate-tree--name)))
+
+(defun crate-tree-copy-dependency ()
+  "Copy a Cargo.toml line for the crate of this table."
+  (interactive)
+  (let* ((data (if crate-tree--directory
+                   (crate-local--record crate-tree--directory)
+                 (crate--crate crate-tree--name)))
+         (line (crate--dependency-line
+                (or (and data (gethash "name" data)) crate-tree--name)
+                (and data (gethash "latest_version" data)))))
+    (kill-new line)
+    (message "Copied: %s" line)))
 
 ;;; Local rustdoc builds
 

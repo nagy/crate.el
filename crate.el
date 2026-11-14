@@ -201,7 +201,8 @@ nil keeps `switch-to-buffer'.  Any other value goes to
   '(crate-insert-fields
     crate-insert-dependencies
     crate-insert-dependents
-    crate-insert-modules)
+    crate-insert-modules
+    crate-insert-structure)
   "Functions that insert the sections of a crate detail buffer.
 `crate--render' runs the entries in order through
 `magit-run-section-hook'.  An entry takes no arguments, runs in
@@ -1135,6 +1136,23 @@ fold of a module and the line of point survive a render."
 
 ;;; Major Mode
 
+(defun crate-insert-structure ()
+  "Insert the Structure section of the current crate.
+The section holds one button, which opens the item structure table
+of the crate that the buffer shows."
+  (magit-insert-section (crate-structure)
+    (magit-insert-heading "Structure")
+    (insert "  ")
+    (insert-text-button "open the crate tree"
+                        :type 'crate-link
+                        'action #'crate--structure-button
+                        'help-echo "Open the item structure table")
+    (insert "\n")))
+
+(defun crate--structure-button (_button)
+  "Open the crate tree of the crate that the buffer shows."
+  (crate-tree-show))
+
 (defun crate--thing-at-point-url ()
   "Return the crates.io URL for a dependency crate name at point.
 Serves as a `thing-at-point-provider-alist' entry for `crate-mode'.
@@ -1146,7 +1164,8 @@ property."
   :doc "Keymap for `crate-mode'."
   :parent magit-section-mode-map
   "RET" #'push-button
-  "w" #'crate-copy-dependency)
+  "w" #'crate-copy-dependency
+  "S" #'crate-tree-show)
 
 (define-derived-mode crate-mode magit-section-mode "Crate"
   "Major mode for displaying Rust crate details.
@@ -1288,6 +1307,26 @@ ACTION."
 
 
 ;;; Interactive Commands
+
+(declare-function crate-tree "crate-tree" (name))
+(declare-function crate-tree-directory "crate-tree" (directory))
+
+(defun crate-tree-show ()
+  "Show the item structure of the crate that the current buffer shows.
+In `crate-browse-mode' the row at point names the crate, in
+`crate-mode' the buffer does, and any other buffer prompts for a
+crate name."
+  (interactive)
+  (require 'crate-tree)
+  (cond
+   ((derived-mode-p 'crate-browse-mode)
+    (crate-tree (crate-browse--current-name)))
+   ((derived-mode-p 'crate-mode)
+    (if crate-local-path
+        (crate-tree-directory crate-local-path)
+      (crate-tree crate-name)))
+   (t
+    (call-interactively #'crate-tree))))
 
 ;;;###autoload
 (defun find-crate (&optional name)
@@ -1445,6 +1484,7 @@ every other record to `find-crate'."
   "<follow-link>" #'crate-browse--click-selects-row
   "b"   #'crate-browse-search-url
   "w"   #'crate-copy-dependency
+  "S"   #'crate-tree-show
   "e"   crate-browse-export-map)
 
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"

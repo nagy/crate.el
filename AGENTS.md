@@ -213,6 +213,20 @@ Depth keys `1` to `9` set `crate-tree--max-depth` to one less, and
 `9` means nil (every depth).  The keymap overrides the digit argument
 of `tabulated-list-mode-map`, which this mode never needs.
 
+### Entry points
+
+`S` in `crate-mode` and in `crate-browse-mode` runs `crate-tree-show`,
+which lives in `crate.el` and requires `crate-tree` at call time, so a
+reader who never opens the table never loads it.
+`crate-insert-structure` is the section inserter that puts the entry
+point inside a detail buffer, and it renders one `crate-link` button.
+The default `crate-detail-sections-hook` ends with it.
+
+A tree buffer keys on its name: `Crate Tree: NAME` for a database
+crate and `Crate Tree: NAME (PATH)` for a local one.  A second open of
+the same buffer only displays it, so folds and filters survive, and
+`crate-tree-mode` runs once.
+
 `format_version` 57 through 61 parse, because rustc 1.97 in the flake
 and rustc 1.99 on the development machine both read the fields that
 this parser uses.  Any other value signals a `user-error` instead of

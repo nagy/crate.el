@@ -1714,7 +1714,7 @@ section.  A nil VALUE matches any value."
 (ert-deftest crate-mode-render-nests-sections ()
   "A detail buffer nests its sections under one root section.
 The nine fields come first in `crate-detail-fields' order, then the
-three group sections of `crate-detail-sections-hook'."
+group sections of `crate-detail-sections-hook'."
   (let ((crate--data-cache (make-hash-table :test 'equal)))
     (cl-letf (((symbol-function 'crate--deps)
                (lambda (_name) '(("serde" "^1" "normal" 0))))
@@ -1740,7 +1740,7 @@ three group sections of `crate-detail-sections-hook'."
             (should (equal (mapcar (lambda (section) (oref section type))
                                    (seq-drop children 9))
                            '(crate-dependencies crate-dependents
-                             crate-modules)))
+                             crate-modules crate-structure)))
             (let* ((modules (crate-test--section 'crate-modules))
                    (root-module (car (oref modules children)))
                    (item (car (oref root-module children))))

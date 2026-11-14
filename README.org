@@ -34,6 +34,9 @@ Optional on-demand rustdoc builds via Nix for module tree display.
 - Optional Evil layer: motion, fold, copy and export keys in the table
   and the detail buffer
 - Module tree display from rustdoc JSON (optional, requires Nix)
+- =M-x crate-tree= shows the item structure of a crate as one
+  collapsible table, the way =cargo-modules structure= prints it, with
+  the span, the doc summary and the visibility of every item
 - Bookmark support for both detail and browse buffers
 
 * Usage
@@ -139,6 +142,28 @@ description off the screen.  A table larger than
 of a full crates.io dump on every resize would stall.  Set =crate-display-buffer-action= to
 =crate--other-window-action= to open every crate beside the buffer
 that you started from.
+
+* Crate tree
+
+=M-x crate-tree= shows the item structure of a crate from the
+database, and =M-x crate-tree-directory= shows the structure of a
+local crate.  In a detail buffer, =S= or the =Structure= button opens
+the same table, and =S= on a browse row opens the tree of that row.
+
+The table holds one row per item: kind, name, visibility, file and
+line, and the first sentence of the doc comment.  =TAB= folds a row,
+the keys =1= to =9= set the depth, =s= cycles the sibling order
+(source, name, kind, visibility), and =S= reverses it.  The =f=
+prefix filters: =f p= shows public items only, =f k= chooses the item
+kinds, =f f= keeps the subtree that a regexp matches, and =f r= drops
+every filter.  =RET= opens the source of a local crate, =C-c C-o=
+opens the docs.rs page, =y= copies the item path, =w= copies a
+=Cargo.toml= line, and =g= rebuilds the document.
+
+A local crate runs =cargo doc= with JSON output, which needs =cargo=,
+=rustc= and the dependencies of the crate.  A database crate reads
+the document from the Nix build that the detail buffer uses, so
+=M-x crate-tree= follows =crate-doc-enable=.
 
 * Development
 

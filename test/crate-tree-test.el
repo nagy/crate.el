@@ -666,6 +666,163 @@ library."
         (crate-tree--refresh))
       (should (equal (crate-tree-test--row-ids) before)))))
 
+
+;;; Commands
+
+(ert-deftest crate-tree-open-database-crate ()
+  "A database crate opens its own buffer and reads the Nix document."
+  (let ((displayed nil))
+    (cl-letf (((symbol-function 'crate-doc--json)
+               (lambda (_name) (crate-tree-test--json)))
+              ((symbol-function 'crate--display-buffer)
+               (lambda (buffer)
+                 (setq displayed (get-buffer-create buffer))
+                 (set-buffer displayed))))
+      (unwind-protect
+          (progn
+            (crate-tree--open "harness" nil)
+            (should (equal (buffer-name displayed) "Crate Tree: harness"))
+            (with-current-buffer displayed
+              (should (derived-mode-p 'crate-tree-mode))
+              (should (equal crate-doc--render-function
+                             'crate-tree--render-from-build))
+              (should (equal (car (crate-tree-test--row-ids)) "harness"))))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))))))
+
+(ert-deftest crate-tree-open-local-crate ()
+  "A local crate names its directory in the buffer name."
+  (let ((displayed nil))
+    (cl-letf (((symbol-function 'crate-tree--json)
+               (lambda (_directory) (crate-tree-test--json)))
+              ((symbol-function 'crate--display-buffer)
+               (lambda (buffer)
+                 (setq displayed (get-buffer-create buffer))
+                 (set-buffer displayed))))
+      (unwind-protect
+          (progn
+            (crate-tree--open "my-crate" "/tmp/mycrate/")
+            (should (equal (buffer-name displayed)
+                           "Crate Tree: my-crate (/tmp/mycrate)"))
+            (with-current-buffer displayed
+              (should (equal crate-tree--directory "/tmp/mycrate"))
+              (should-not crate-doc--render-function)
+              (should (equal (car (crate-tree-test--row-ids)) "harness"))))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))))))
+
+(ert-deftest crate-tree-open-keeps-folds ()
+  "A second open of the same buffer keeps its fold state."
+  (let ((displayed nil))
+    (cl-letf (((symbol-function 'crate-tree--json)
+               (lambda (_directory) (crate-tree-test--json)))
+              ((symbol-function 'crate--display-buffer)
+               (lambda (buffer)
+                 (setq displayed (get-buffer-create buffer))
+                 (set-buffer displayed))))
+      (unwind-protect
+          (progn
+            (crate-tree--open "my-crate" "/tmp/mycrate/")
+            (with-current-buffer displayed
+              (puthash "harness::api" t crate-tree--folded)
+              (crate-tree--reprint))
+            (crate-tree--open "my-crate" "/tmp/mycrate/")
+            (with-current-buffer displayed
+              (should (gethash "harness::api" crate-tree--folded))
+              (should-not (member "harness::api::net"
+                                  (crate-tree-test--row-ids)))))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))))))
+
+(ert-deftest crate-tree-command-without-crate ()
+  "The name command refuses a crate that the database does not hold."
+  (cl-letf (((symbol-function 'crate--crate) (lambda (_name) nil)))
+    (should-error (crate-tree "nope") :type 'user-error)))
+
+(ert-deftest crate-tree-directory-without-manifest ()
+  "The directory command refuses a directory without a Cargo.toml."
+  (let ((directory (make-temp-file "crate-tree-no-manifest" t)))
+    (unwind-protect
+        (should-error (crate-tree-directory directory) :type 'user-error)
+      (delete-directory directory t))))
+
+(ert-deftest crate-tree-show-from-detail-local ()
+  "`crate-tree-show' passes the directory of a local detail buffer."
+  (with-temp-buffer
+    (crate-mode)
+    (setq-local crate-name "my-crate")
+    (setq-local crate-local-path "/tmp/mycrate")
+    (let (called)
+      (cl-letf (((symbol-function 'crate-tree-directory)
+                 (lambda (directory) (setq called directory))))
+        (crate-tree-show))
+      (should (equal called "/tmp/mycrate")))))
+
+(ert-deftest crate-tree-show-from-detail-database ()
+  "`crate-tree-show' passes the name of a database detail buffer."
+  (with-temp-buffer
+    (crate-mode)
+    (setq-local crate-name "serde")
+    (setq-local crate-local-path nil)
+    (let (called)
+      (cl-letf (((symbol-function 'crate-tree)
+                 (lambda (name) (setq called name))))
+        (crate-tree-show))
+      (should (equal called "serde")))))
+
+(ert-deftest crate-tree-show-from-browse ()
+  "`crate-tree-show' reads the crate of the row in a browse buffer."
+  (with-temp-buffer
+    (crate-browse-mode)
+    (setq tabulated-list-entries '(("serde" ["serde" "1.0.0" "desc"])))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (let (called)
+      (cl-letf (((symbol-function 'crate-tree)
+                 (lambda (name) (setq called name))))
+        (crate-tree-show))
+      (should (equal called "serde")))))
+
+(ert-deftest crate-insert-structure-renders ()
+  "The Structure section holds the button that opens the table."
+  (with-temp-buffer
+    (crate-insert-structure)
+    (let ((text (buffer-substring-no-properties
+                 (point-min) (point-max))))
+      (should (string-match-p "Structure" text))
+      (should (string-match-p "open the crate tree" text)))))
+
+(ert-deftest crate-detail-hook-holds-structure ()
+  "The default section list ends with the Structure section."
+  (should (memq 'crate-insert-structure crate-detail-sections-hook)))
+
+(ert-deftest crate-tree-mode-keymap ()
+  "The tree keymap binds the row commands."
+  (crate-tree-test--with-buffer
+    (should (eq (key-binding (kbd "TAB")) 'crate-tree-toggle))
+    (should (eq (key-binding (kbd "s")) 'crate-tree-sort))
+    (should (eq (key-binding (kbd "S")) 'crate-tree-reverse-sort))
+    (should (eq (key-binding (kbd "RET")) 'crate-tree-visit))
+    (should (eq (key-binding (kbd "y")) 'crate-tree-copy-path))
+    (should (eq (key-binding (kbd "w")) 'crate-tree-copy-dependency))
+    (should (keymapp (key-binding (kbd "f"))))))
+
+(ert-deftest crate-tree-copy-dependency-local ()
+  "The copy command reads the version of a local crate record."
+  (crate-tree-test--with-buffer
+    (let ((record (make-hash-table :test #'equal))
+          copied)
+      (puthash "name" "my-crate" record)
+      (puthash "latest_version" "0.3.0" record)
+      (setq-local crate-tree--name "my-crate")
+      (setq-local crate-tree--directory "/tmp/mycrate")
+      (cl-letf (((symbol-function 'crate-local--record)
+                 (lambda (_directory) record))
+                ((symbol-function 'kill-new)
+                 (lambda (text) (setq copied text))))
+        (crate-tree-copy-dependency))
+      (should (equal copied "my-crate = \"0.3.0\"")))))
+
 ;;; The `cargo-modules structure' format
 
 (ert-deftest crate-tree-structure-matches-cargo-modules ()
