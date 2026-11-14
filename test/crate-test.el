@@ -2503,6 +2503,37 @@ callers must filter them by checking for :null."
                          "my-crate")))
       (delete-directory dir t))))
 
+(ert-deftest crate-local-package-follows-a-symlinked-directory ()
+  "A directory reached through a symlink answers its own package.
+`cargo metadata' answers the canonical manifest path, and an
+unresolved comparison then falls back to the first package, which
+signals `listp' on the JSON vector."
+  (skip-unless (memq system-type '(gnu gnu/linux darwin berkeley-unix)))
+  (let* ((dir (make-temp-file "crate-local-real-" t))
+         (link (make-temp-file "crate-local-link-")))
+    (unwind-protect
+        (progn
+          (delete-file link)
+          (make-symbolic-link dir link)
+          (let* ((manifest (crate-local--manifest link))
+                 (json (crate-test--cargo-metadata
+                        (crate-local--manifest dir)
+                        :name "my-crate"
+                        :workspace-mate (expand-file-name "mate/Cargo.toml" dir))))
+            (should (equal (gethash "name" (crate-local--package json manifest))
+                           "my-crate"))))
+      (delete-file link)
+      (delete-directory dir t))))
+
+(ert-deftest crate-local-package-falls-back-to-the-first-package ()
+  "A manifest that no package names answers the first package."
+  (let* ((json (crate-test--cargo-metadata "/crates/other/Cargo.toml"
+                                          :name "other"
+                                          :workspace-mate "/crates/first/Cargo.toml")))
+    (should (equal (gethash "name" (crate-local--package
+                                    json "/crates/absent/Cargo.toml"))
+                   "other"))))
+
 (ert-deftest crate-local-record-maps-metadata ()
   "`crate-local--record' maps `cargo metadata' onto a crate record."
   (crate-test--with-local-crate dir

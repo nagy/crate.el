@@ -334,6 +334,12 @@ A local record memoizes under `(list 'local MANIFEST)` with the same
 manifest.  A local crate keeps its own buffer,
 `Crate: <name> (<path>)`, and its bookmark carries the directory.
 
+`cargo metadata` answers canonical paths, so `crate-local--truename`
+resolves the symlinks on both sides of a manifest comparison and on
+the base of a path dependency.  A directory that a reader reaches
+through a symlink then answers its own package.  `packages` parses
+as a vector, so the fallback reads `seq-first`, never `car`.
+
 A local dependency row has the database shape plus a `(KIND . TARGET)`
 source spec in its fifth slot.  A registry dependency carries no spec;
 a path or git dependency prints `{ path = "../foo" }` or

@@ -372,17 +372,26 @@ A missing file and a file that is not a database both answer nil."
             (json-parse-buffer)
           (error nil))))))
 
+(defun crate-local--truename (path)
+  "Return PATH with every symlink resolved.
+`cargo metadata' answers canonical paths, so a directory that a
+reader reaches through a symlink must read the same name here."
+  (declare (pure t) (side-effect-free t))
+  (file-truename (expand-file-name path)))
+
 (defun crate-local--package (json manifest)
   "Return the package of `cargo metadata' JSON that MANIFEST names.
 A workspace directory answers every package of the workspace, so
-the first package answers as a fallback."
+the first package answers as a fallback.  A JSON array parses as a
+vector, so a vector takes no `car'."
   (declare (side-effect-free t))
   (when-let* ((packages (gethash "packages" json)))
     (or (seq-find (lambda (package)
-                    (equal (expand-file-name (gethash "manifest_path" package))
-                           (expand-file-name manifest)))
+                    (equal (crate-local--truename
+                            (gethash "manifest_path" package))
+                           (crate-local--truename manifest)))
                   packages)
-        (car packages))))
+        (seq-first packages))))
 
 (defun crate-local--git-url (source)
   "Return the web URL that git SOURCE names."
@@ -409,7 +418,8 @@ name, so the row makes it relative to DIR."
           (if (eq optional t) 1 0)
           (cond
            ((stringp path)
-            (cons "path" (file-relative-name path (expand-file-name dir))))
+            (cons "path" (file-relative-name
+                           path (crate-local--truename dir))))
            ((and (stringp source) (string-prefix-p "git+" source))
             (cons "git" (crate-local--git-url source)))))))
 
