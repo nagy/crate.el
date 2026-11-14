@@ -604,7 +604,7 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (setq-local crate-tree--sort 'source)
   (setq-local crate-tree--items (make-hash-table :test #'equal))
   (setq-local tabulated-list-entries nil)
-  (setq-local tabulated-list-padding 1)
+  (setq-local tabulated-list-padding 0)
   (setq-local tabulated-list-sort-key nil)
   (setq-local tabulated-list-format (crate-tree--format nil))
   (setq-local tabulated-list-printer #'crate-tree--print-entry)
