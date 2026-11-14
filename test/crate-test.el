@@ -2525,14 +2525,53 @@ signals `listp' on the JSON vector."
       (delete-file link)
       (delete-directory dir t))))
 
-(ert-deftest crate-local-package-falls-back-to-the-first-package ()
-  "A manifest that no package names answers the first package."
-  (let* ((json (crate-test--cargo-metadata "/crates/other/Cargo.toml"
-                                          :name "other"
-                                          :workspace-mate "/crates/first/Cargo.toml")))
-    (should (equal (gethash "name" (crate-local--package
-                                    json "/crates/absent/Cargo.toml"))
-                   "other"))))
+(ert-deftest crate-local-package-answers-nil-for-a-virtual-root ()
+  "A manifest that names no package answers nil.
+A virtual workspace root names no package, so no fallback may
+pick one member in its place."
+  (let ((json (crate-test--cargo-metadata "/crates/member/Cargo.toml"
+                                          :name "member")))
+    (should-not (crate-local--package json "/crates/root/Cargo.toml"))))
+
+(ert-deftest crate-local-resolve-directory-keeps-its-own-package ()
+  "A directory that holds a package answers its own name."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (json (crate-test--cargo-metadata
+                  manifest :name "my-crate"
+                  :workspace-mate (expand-file-name "mate/Cargo.toml" dir))))
+      (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) json))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _) (error "Must not prompt"))))
+        (should (equal (crate-local--resolve-directory dir)
+                       (file-name-as-directory dir)))))))
+
+(ert-deftest crate-local-resolve-directory-prompts-for-a-member ()
+  "A virtual workspace root prompts for one member of the workspace."
+  (let* ((root (make-temp-file "crate-local-root-" t))
+         (member (crate-local--truename (expand-file-name "crates/mate/" root))))
+    (unwind-protect
+        (progn
+          (make-directory member t)
+          (let* ((json (crate-test--cargo-metadata
+                        (crate-local--manifest member) :name "mate"))
+                 (asked nil))
+            (cl-letf (((symbol-function 'crate-local--metadata)
+                       (lambda (_dir) json))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt collection &rest _)
+                         (setq asked (mapcar #'car collection))
+                         (caar collection))))
+              (should (equal (crate-local--resolve-directory root)
+                             (file-name-as-directory member)))
+              (should (equal asked '("mate (crates/mate)"))))))
+      (delete-directory root t))))
+
+(ert-deftest crate-local-resolve-directory-without-metadata ()
+  "A directory whose metadata cannot be read answers nil."
+  (crate-test--with-local-crate dir
+    (cl-letf (((symbol-function 'crate-local--metadata) (lambda (_dir) nil)))
+      (should-not (crate-local--resolve-directory dir)))))
 
 (ert-deftest crate-local-record-maps-metadata ()
   "`crate-local--record' maps `cargo metadata' onto a crate record."
@@ -2683,6 +2722,37 @@ signals `listp' on the JSON vector."
               (goto-char (match-beginning 0))
               (should-not (thing-at-point 'url t)))
         (when (get-buffer buffer-name) (kill-buffer buffer-name)))))))
+
+(ert-deftest crate-visit-directory-opens-the-chosen-member ()
+  "A virtual workspace root shows the member of the prompt."
+  (let* ((root (make-temp-file "crate-local-root-" t))
+         (member (crate-local--truename (expand-file-name "crates/mate/" root)))
+         (member-name (directory-file-name member)))
+    (unwind-protect
+        (progn
+          (make-directory member t)
+          (with-temp-file (expand-file-name "Cargo.toml" root)
+            (insert "[workspace]\n"))
+          (let* ((json (crate-test--cargo-metadata
+                        (crate-local--manifest member) :name "mate"))
+                 (buffer-name (format "Crate: mate (%s)" member-name)))
+            (cl-letf (((symbol-function 'crate-local--metadata)
+                       (lambda (_dir) json))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt collection &rest _) (caar collection)))
+                      ((symbol-function 'crate--dependents) #'ignore)
+                      ((symbol-function 'switch-to-buffer)
+                       (lambda (name &optional _norecord)
+                         (set-buffer (get-buffer-create name))
+                         name)))
+              (unwind-protect
+                  (progn
+                    (crate-visit-directory root)
+                    (should (equal (buffer-name) buffer-name))
+                    (should (equal crate-local-path member-name))
+                    (should (equal crate-name "mate")))
+                (when (get-buffer buffer-name) (kill-buffer buffer-name))))))
+      (delete-directory root t))))
 
 (ert-deftest crate-visit-directory-requires-a-manifest ()
   "A directory without `Cargo.toml' signals a user error."

@@ -112,7 +112,8 @@ the Nix build writes the store path of its own cargo there, so an
 installed package needs no cargo on =PATH=.  Set it to nil to turn the
 command off.  The buffer is named =Crate: <name> (<path>)=, so a local
 checkout and the published crate of the same name keep separate
-buffers.
+buffers.  A virtual workspace root holds no package, so the command
+prompts for one member and shows that member from its own directory.
 
 Dependency rows read like the =Cargo.toml= lines that name them.  A
 registry dependency shows =serde = "1.0"= and links to crates.io, a

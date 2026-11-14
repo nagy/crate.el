@@ -337,8 +337,14 @@ manifest.  A local crate keeps its own buffer,
 `cargo metadata` answers canonical paths, so `crate-local--truename`
 resolves the symlinks on both sides of a manifest comparison and on
 the base of a path dependency.  A directory that a reader reaches
-through a symlink then answers its own package.  `packages` parses
-as a vector, so the fallback reads `seq-first`, never `car`.
+through a symlink then answers its own package.
+
+A virtual workspace root holds no package of its own, and
+`crate-local--package` answers nil for it, never a member.
+`crate-local--resolve-directory` then prompts for one member through
+`crate-local--choose-member`, and answers that member directory, so
+the buffer, its bookmark and the rustdoc build read a manifest that
+holds a package.  A directory that holds a package never prompts.
 
 A local dependency row has the database shape plus a `(KIND . TARGET)`
 source spec in its fifth slot.  A registry dependency carries no spec;

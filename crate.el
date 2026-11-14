@@ -381,17 +381,55 @@ reader reaches through a symlink must read the same name here."
 
 (defun crate-local--package (json manifest)
   "Return the package of `cargo metadata' JSON that MANIFEST names.
-A workspace directory answers every package of the workspace, so
-the first package answers as a fallback.  A JSON array parses as a
-vector, so a vector takes no `car'."
+A directory inside a workspace answers every package of that
+workspace, so the package whose `manifest_path' is MANIFEST wins.
+A virtual workspace root names no package, so this answers nil."
   (declare (side-effect-free t))
   (when-let* ((packages (gethash "packages" json)))
-    (or (seq-find (lambda (package)
-                    (equal (crate-local--truename
-                            (gethash "manifest_path" package))
-                           (crate-local--truename manifest)))
-                  packages)
-        (seq-first packages))))
+    (seq-find (lambda (package)
+                (equal (crate-local--truename
+                        (gethash "manifest_path" package))
+                       (crate-local--truename manifest)))
+              packages)))
+
+(defun crate-local--package-directory (package)
+  "Return the directory of `cargo metadata' PACKAGE."
+  (declare (pure t) (side-effect-free t))
+  (directory-file-name
+   (file-name-directory (crate-local--truename
+                         (gethash "manifest_path" package)))))
+
+(defun crate-local--choose-member (json dir)
+  "Read one member of the workspace that JSON answers for DIR.
+The prompt shows the name of every member and its directory,
+relative to DIR.  A package of a workspace root reads as that
+member, which is why the caller must not fall back to one."
+  (let ((members (mapcar (lambda (package)
+                           (cons (format "%s (%s)"
+                                         (gethash "name" package)
+                                         (file-relative-name
+                                          (crate-local--package-directory
+                                           package)
+                                          (crate-local--truename dir)))
+                                 package))
+                         (append (gethash "packages" json) nil))))
+    (cdr (assoc (completing-read "Workspace member: " members nil t)
+                members))))
+
+(defun crate-local--resolve-directory (dir)
+  "Return the crate directory that DIR names, or nil.
+DIR that holds a package answers its own name.  A virtual
+workspace root prompts for one member and answers the directory of
+that member, so the buffer, its bookmark and the rustdoc build all
+read a manifest that holds a package."
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (json (crate-local--metadata dir)))
+    (when json
+      (if (crate-local--package json (crate-local--manifest dir))
+          dir
+        (when-let* ((member (crate-local--choose-member json dir)))
+          (file-name-as-directory
+           (crate-local--package-directory member)))))))
 
 (defun crate-local--git-url (source)
   "Return the web URL that git SOURCE names."
@@ -1391,6 +1429,8 @@ candidates."
 (defun crate-visit-directory (&optional dir)
   "Display the Rust crate in local directory DIR in `crate-mode'.
 DIR defaults to `default-directory' and must hold a `Cargo.toml'.
+A virtual workspace root holds no package, so the command prompts
+for one member and shows that member from its own directory.
 The buffer shows no Dependents and no Modules section for a crate
 that the database does not hold."
   (interactive (list (crate-local--read-directory)))
@@ -1398,22 +1438,26 @@ that the database does not hold."
               (expand-file-name (or dir default-directory)))))
     (unless (file-exists-p (crate-local--manifest dir))
       (user-error "No Cargo.toml in `%s'" (directory-file-name dir)))
-    (let ((record (crate-local--record dir)))
-      (unless record
+    (let ((crate-dir (crate-local--resolve-directory dir)))
+      (unless crate-dir
         (user-error "Cannot read the crate metadata of `%s'"
                     (directory-file-name dir)))
-      (let* ((name (crate--canonical-name (gethash "name" record)))
-             (bufname (format "Crate: %s (%s)" name
-                              (directory-file-name dir))))
-        (crate--display-buffer bufname)
-        (crate-mode)
-        ;; Set the crate locals after `crate-mode', whose
-        ;; `kill-all-local-variables' would otherwise wipe them.
-        (setq-local crate-name name)
-        (setq-local crate-data record)
-        (setq-local crate-local-path (directory-file-name dir))
-        (crate--render)
-        (run-hooks 'crate-visit-hook)))))
+      (let ((record (crate-local--record crate-dir)))
+        (unless record
+          (user-error "Cannot read the crate metadata of `%s'"
+                      (directory-file-name crate-dir)))
+        (let* ((name (crate--canonical-name (gethash "name" record)))
+               (bufname (format "Crate: %s (%s)" name
+                                (directory-file-name crate-dir))))
+          (crate--display-buffer bufname)
+          (crate-mode)
+          ;; Set the crate locals after `crate-mode', whose
+          ;; `kill-all-local-variables' would otherwise wipe them.
+          (setq-local crate-name name)
+          (setq-local crate-data record)
+          (setq-local crate-local-path (directory-file-name crate-dir))
+          (crate--render)
+          (run-hooks 'crate-visit-hook))))))
 
 
 ;;;###autoload
