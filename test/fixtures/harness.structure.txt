@@ -1,0 +1,35 @@
+crate harness
+├── type Alias: pub
+├── enum Color: pub
+│   └── fn name: pub
+├── unsafe trait Greet: pub
+├── struct Half: pub(crate)
+│   ├── async fn fetch: pub
+│   ├── const fn fixed: pub
+│   ├── fn generic: pub
+│   ├── fn hello: pub(crate)
+│   ├── fn new: pub
+│   ├── unsafe fn risky: pub
+│   └── fn secret: pub(crate)
+├── mod api: pub
+│   ├── struct Request: pub
+│   │   └── fn send: pub
+│   ├── mod net: pub
+│   │   ├── struct Socket: pub
+│   │   │   └── fn open: pub
+│   │   ├── fn connect: pub
+│   │   └── fn handshake: pub(self)
+│   └── mod parse: pub
+│       ├── fn parse: pub
+│       └── fn trim: pub(crate)
+├── mod hidden: pub(crate)
+│   ├── fn hidden_public: pub
+│   └── mod inner: pub(self)
+│       └── fn deep: pub
+├── mod money: pub
+│   ├── fn convert: pub
+│   └── mod currency: pub
+│       ├── enum Currency: pub
+│       └── fn rate: pub
+├── fn root_private: pub(crate)
+└── fn root_public: pub

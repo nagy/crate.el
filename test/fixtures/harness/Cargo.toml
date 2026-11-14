@@ -1,0 +1,15 @@
+[package]
+name = "harness"
+version = "0.1.0"
+edition = "2021"
+
+# The fixture crate that the rustdoc JSON tests read.  It holds no
+# dependency on purpose: the Nix derivation that documents it needs
+# no registry, no network and no lockfile, and `cargo doc --offline'
+# succeeds in a sandbox.
+#
+# Every construct here exists to cover one rule of the parser:
+# nested modules, private items, restricted visibility, inherent and
+# trait impls, consts, statics, type aliases, macros, deprecated
+# items, generic parameters and `#[cfg(test)]' code.
+[dependencies]

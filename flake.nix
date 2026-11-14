@@ -52,6 +52,11 @@
           # checkdoc plus package-lint over the package and test sources.
           lint = pkgs.callPackage ./nix/lint.nix { inherit (crateEl) src; };
 
+          # Rustdoc JSON of the test fixture crate.  The tree suite reads
+          # it through a placeholder, so the suite runs no rustc and
+          # parses the same document on every machine.
+          harnessDoc = pkgs.callPackage ./nix/harness-doc.nix { };
+
           # Needs Xvfb, so it stays out of `checks'.
           screenshot = pkgs.callPackage ./nix/emacs-screenshot.nix {
             inherit crateEl testCratesDb;
@@ -73,6 +78,10 @@
           checks = {
             default = crateEl;
             inherit crateEl lint;
+
+            # The fixture JSON builds on its own, so a broken fixture
+            # crate fails here before the suite ever reads it.
+            harness-doc = harnessDoc;
           };
 
           # Emacs plus the tools that the rustdoc path, the local-crate
