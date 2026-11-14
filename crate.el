@@ -62,6 +62,7 @@
 (require 'cl-lib)
 (require 'goto-addr)
 (require 'magit-section)
+(require 'seq)
 ;; `thing-at-point-provider-alist' is defined here; crate-mode sets it
 ;; buffer-locally, so the file must be loaded for the variable to exist.
 (require 'thingatpt)
@@ -104,6 +105,24 @@ All caches key on this path, so changing it — even via plain
 (defcustom crate-annotation-width 70
   "Maximum width of the description annotation shown during completion."
   :type 'integer
+  :group 'crate)
+
+(defcustom crate-completion-limit 200
+  "Maximum number of crate names one completion query returns.
+A short prefix matches tens of thousands of names (358 423 crates
+in a full dump, 35 628 of them under \"s\"), and every candidate
+costs a row fetch.  The query stops here.  Set it to nil to fetch
+every match."
+  :type '(choice (const :tag "Every match" nil) integer)
+  :group 'crate)
+
+(defcustom crate-dependents-limit 200
+  "Maximum number of dependents the Dependents section lists.
+A popular crate has over a hundred thousand dependents: serde has
+135 172, and one button per dependent takes 1.3 s to render.  The
+heading marks a cut list with a plus sign.  Set it to nil to list
+every dependent."
+  :type '(choice (const :tag "Every dependent" nil) integer)
   :group 'crate)
 
 (defcustom crate-browse-name-min-width 20
@@ -247,13 +266,58 @@ selected window.")
 (defvar crate--data-cache (make-hash-table :test #'equal)
   "Cache of crate data keyed by database path.")
 
+(defconst crate--crates-columns
+  '(name display_name description documentation homepage repository
+         created_at updated_at latest_version license downloads)
+  "Columns of the `crates' table, in the order a crate record reads them.")
+
+(defconst crate--crates-sql
+  (format "SELECT %s FROM crates"
+          (mapconcat #'symbol-name crate--crates-columns ", "))
+  "Query that selects every crate record.")
+
+(defconst crate--crate-sql
+  (format "SELECT %s FROM crates WHERE name IN (?, ?)"
+          (mapconcat #'symbol-name crate--crates-columns ", "))
+  "Query that selects one crate record by its published name.")
+
+(defun crate--crate-spellings (name)
+  "Return the published spellings that crate NAME can have.
+The database keys a crate by its published name, which uses either
+hyphens or underscores; `crate--canonical-name' uses underscores
+only.  No published name mixes both separators, and no two crates
+share a canonical form, so two spellings reach every crate.
+Verified against a full crates.io dump of 358 423 names."
+  (declare (side-effect-free t))
+  (let ((canonical (crate--canonical-name name)))
+    (list canonical (string-replace "_" "-" canonical))))
+
+(defun crate--crate-entry (row)
+  "Return a crate record built from the `crates' table ROW.
+ROW holds the values of `crate--crates-columns'.  A nil value
+inserts no key, so a reader cannot tell an absent value from an
+absent column."
+  (declare (side-effect-free t))
+  (let ((entry (make-hash-table :test #'equal)))
+    (cl-loop for column in crate--crates-columns
+             for value in row
+             when value
+             do (puthash (symbol-name column) value entry))
+    (unless (gethash "downloads" entry)
+      (puthash "downloads" 0 entry))
+    entry))
+
 (defun crate--list ()
-  "Load crate data from the SQLite database at `crate-data-path'.
+  "Load every crate from the SQLite database at `crate-data-path'.
 Returns a hash table keyed by canonical crate name, or nil if
 the file is missing or cannot be read.  Results are memoized
 via `with-memoization'; a :failed sentinel prevents retrying
 a corrupt or missing file on every subsequent call.  The cache
-key includes `crate-data-path', so a path switch self-invalidates."
+key includes `crate-data-path', so a path switch self-invalidates.
+
+A full crates.io dump holds 358 423 rows, so this builds 358 423
+hash tables: 1.8 s and 647 MiB, fresh once per database path.  A
+single-crate lookup reads `crate--crate' instead."
   (let ((cached
          (with-memoization (gethash (list 'data crate-data-path) crate--data-cache)
            (if (and crate-data-path (file-exists-p crate-data-path))
@@ -261,45 +325,62 @@ key includes `crate-data-path', so a path switch self-invalidates."
                    (let* ((db (sqlite-open crate-data-path))
                           ;; `unwind-protect', never `prog1': a failed
                           ;; query must not leak the handle.
-                          (rows
-                           (unwind-protect
-                               (sqlite-select
-                                db
-                                "SELECT name, display_name, description,
-                                    documentation, homepage, repository,
-                                    created_at, updated_at,
-                                    latest_version, license, downloads
-                             FROM crates")
-                             (sqlite-close db)))
+                          (rows (unwind-protect
+                                    (sqlite-select db crate--crates-sql)
+                                  (sqlite-close db)))
                           (table (make-hash-table :test #'equal)))
                      (dolist (row rows)
-                       (let ((entry (make-hash-table :test #'equal)))
-                         (puthash "name" (nth 0 row) entry)
-                         (when (nth 1 row)
-                           (puthash "display_name" (nth 1 row) entry))
-                         (when (nth 2 row)
-                           (puthash "description" (nth 2 row) entry))
-                         (when (nth 3 row)
-                           (puthash "documentation" (nth 3 row) entry))
-                         (when (nth 4 row)
-                           (puthash "homepage" (nth 4 row) entry))
-                         (when (nth 5 row)
-                           (puthash "repository" (nth 5 row) entry))
-                         (when (nth 6 row)
-                           (puthash "created_at" (nth 6 row) entry))
-                         (when (nth 7 row)
-                           (puthash "updated_at" (nth 7 row) entry))
-                         (when (nth 8 row)
-                           (puthash "latest_version" (nth 8 row) entry))
-                         (when (nth 9 row)
-                           (puthash "license" (nth 9 row) entry))
-                         (puthash "downloads" (or (nth 10 row) 0) entry)
+                       (let ((entry (crate--crate-entry row)))
                          (puthash (crate--canonical-name (nth 0 row)) entry table)))
                      table)
                  (error :failed))
              :failed))))
     (unless (eq cached :failed)
       cached)))
+
+(defun crate--crate (name)
+  "Return the crates-table record for crate NAME, or nil.
+NAME is canonicalized first.  One lookup through the `name'
+primary-key btree costs 0.07 ms on a full crates.io dump, so this
+scales where `crate--list' does not.  Memoized in
+`crate--data-cache' with the database path in the key; a :failed
+sentinel caches a missing row and a failed query alike, so
+neither repeats its query."
+  (let* ((canonical (crate--canonical-name name))
+         (key (list 'crate crate-data-path canonical))
+         (cached (with-memoization (gethash key crate--data-cache)
+                   (or (crate--crate-query canonical) :failed))))
+    (unless (eq cached :failed)
+      cached)))
+
+(defun crate--crate-query (name)
+  "Return the crates-table record for NAME from SQLite.
+Returns nil when no row matches and when the database cannot be
+read."
+  (when (and crate-data-path (file-exists-p crate-data-path))
+    (condition-case nil
+        (let ((db (sqlite-open crate-data-path)))
+          ;; `unwind-protect', never `prog1'.
+          (unwind-protect
+              (when-let* ((row (car (sqlite-select db crate--crate-sql
+                                                   (crate--crate-spellings name)))))
+                (crate--crate-entry row))
+            (sqlite-close db)))
+      (error nil))))
+
+(defun crate--database-readable-p ()
+  "Return non-nil when `crate-data-path' answers a query.
+A missing file and a file that is not a database both answer nil.
+Distinguishes an unreadable database from a missing crate, which
+look the same to `crate--crate'."
+  (and crate-data-path
+       (file-exists-p crate-data-path)
+       (condition-case nil
+           (let ((db (sqlite-open crate-data-path)))
+             (unwind-protect
+                 (progn (sqlite-select db "SELECT name FROM crates LIMIT 1") t)
+               (sqlite-close db)))
+         (error nil))))
 
 
 ;;; Doc Build
@@ -432,15 +513,14 @@ First use starts an ASYNC build (see `crate-doc--start-build') and
 returns nil; the crate buffer re-renders with the module tree when
 the build completes.  Also nil while building, when docs cannot be
 built, or after a prior build failed (cached `:failed' sentinel)."
-  (when-let* ((table (and crate-doc-enable (crate--list))))
-    (when (gethash name table)
-      (let ((cached (gethash (list name crate-data-path) crate-doc--cache)))
-        (cond
-         ((eq cached :failed) nil)
-         (cached cached)
-         (t
-          (crate-doc--start-build name (current-buffer))
-          nil))))))
+  (when (and crate-doc-enable (crate--crate name))
+    (let ((cached (gethash (list name crate-data-path) crate-doc--cache)))
+      (cond
+       ((eq cached :failed) nil)
+       (cached cached)
+       (t
+        (crate-doc--start-build name (current-buffer))
+        nil)))))
 
 (defun crate-doc--module-tree (json)
   "Return the module tree from rustdoc JSON.
@@ -540,25 +620,53 @@ rows) are cached."
       (unless (eq cached :failed)
         cached))))
 
+(defconst crate--dependents-sql
+  "SELECT DISTINCT crate_name FROM dependencies WHERE dep_name = ?
+   ORDER BY crate_name"
+  "Reverse query over the `dependencies' table.")
+
 (defun crate--dependents (name)
   "Return the names of crates depending on crate NAME.
-A reverse lookup on the `dependencies' table.  Memoized like
+A reverse lookup on the `dependencies' table, cut at
+`crate-dependents-limit' rows: serde has 135 172 dependents, and
+one button per dependent costs 1.3 s to render.  Memoized like
 `crate--deps', keyed by database path with a :failed sentinel."
+  (car (crate--dependents-data name)))
+
+(defun crate--dependents-truncated-p (name)
+  "Return non-nil when `crate--dependents' cut the list for NAME."
+  (cdr (crate--dependents-data name)))
+
+(defun crate--dependents-data (name)
+  "Return the (NAMES . TRUNCATED) pair that describes the dependents of NAME.
+NAMES holds at most `crate-dependents-limit' names, and TRUNCATED
+is non-nil when more crates depend on NAME.  The query asks for
+one name past the limit, so it does not pay for a count it never
+shows.  Caches (nil . nil) for a crate that nothing depends on,
+because a nil answer would make `with-memoization' re-query on
+every call."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (let ((cached
            (with-memoization
                (gethash (list 'dependents crate-data-path name) crate--data-cache)
              (condition-case nil
-                 (let ((db (sqlite-open crate-data-path)))
-                   (unwind-protect
-                       (mapcar #'car
-                               (sqlite-select
-                                db
-                                "SELECT DISTINCT crate_name
-                             FROM dependencies WHERE dep_name = ?
-                                  ORDER BY crate_name"
-                                (list name)))
-                     (sqlite-close db)))
+                 (let* ((db (sqlite-open crate-data-path))
+                        (limit (and crate-dependents-limit
+                                    (1+ crate-dependents-limit)))
+                        (rows
+                         (unwind-protect
+                             (mapcar #'car
+                                     (if limit
+                                         (sqlite-select
+                                          db (concat crate--dependents-sql " LIMIT ?")
+                                          (list name limit))
+                                       (sqlite-select db crate--dependents-sql
+                                                      (list name))))
+                           (sqlite-close db))))
+                   (if limit
+                       (cons (seq-take rows crate-dependents-limit)
+                             (> (length rows) crate-dependents-limit))
+                     (cons rows nil)))
                (error :failed)))))
       (unless (eq cached :failed)
         cached))))
@@ -895,12 +1003,22 @@ crate, so a crate without a documentation column still links."
                   "\n"))))))
 
 (defun crate-insert-dependents ()
-  "Insert the Dependents section of the current crate."
+  "Insert the Dependents section of the current crate.
+The heading marks a list that `crate-dependents-limit' cut with a
+plus sign, so a reader does not mistake it for the whole list."
   (when-let* ((dependents (crate--dependents crate-name)))
     (insert "\n")
     (magit-insert-section (crate-dependents)
-      (magit-insert-heading (crate--child-count (length dependents))
-                            "Dependents")
+      (if (and magit-section-show-child-count
+               (crate--dependents-truncated-p crate-name))
+          ;; `magit-insert-heading' formats a count it receives, so
+          ;; the whole heading carries its faces here.
+          (magit-insert-heading
+           (concat (propertize "Dependents " 'font-lock-face 'magit-section-heading)
+                   (propertize (format "(%d+)" (length dependents))
+                               'font-lock-face 'magit-section-child-count)))
+        (magit-insert-heading (crate--child-count (length dependents))
+                              "Dependents"))
       (dolist (name dependents)
         (insert-text-button name
                             :type 'crate-link
@@ -1055,6 +1173,10 @@ must match literally."
   (setq s (string-replace "%" "\\%" s))
   (string-replace "_" "\\_" s))
 
+(defconst crate--match-names-sql
+  "SELECT name FROM crates WHERE name LIKE ? ESCAPE '\\' ORDER BY name"
+  "Prefix query over published crate names.")
+
 (defun crate--match-names (prefix)
   "Return published crate names starting with PREFIX.
 Queries SQLite per call — no full name list materializes, so
@@ -1062,25 +1184,33 @@ completion scales to a full crates.io dump.  The prefix pattern
 matches the collection contract (`complete-with-action'
 prefix-filters each query); completion styles query with their own
 strings and filter further on top.  Wildcards in PREFIX are
-escaped via `crate--sql-like-escape'."
+escaped via `crate--sql-like-escape'.
+
+The connection turns on `case_sensitive_like'.  `LIKE' compares
+case-insensitively by default, which keeps SQLite off the `name'
+primary-key btree: `EXPLAIN QUERY PLAN' answers `SCAN crates', and
+one keystroke costs 50 ms.  Stored names are all lowercase, so a
+case-sensitive LIKE over a downcased PREFIX walks the btree
+instead, and `crate-completion-limit' stops the walk early: 0.03 ms."
   (when (and crate-data-path (file-exists-p crate-data-path))
     (condition-case nil
-        (let ((db (sqlite-open crate-data-path)))
+        (let ((db (sqlite-open crate-data-path))
+              (pattern (concat (crate--sql-like-escape (downcase prefix)) "%")))
+          ;; `unwind-protect', never `prog1'.
           (unwind-protect
-              (mapcar #'car
-                      (sqlite-select
-                       db
-                       "SELECT name FROM crates WHERE name LIKE ? ESCAPE '\\'
-                        ORDER BY name"
-                       (list (concat (crate--sql-like-escape prefix) "%"))))
+              (progn
+                (sqlite-execute db "PRAGMA case_sensitive_like=ON")
+                (mapcar #'car
+                        (if crate-completion-limit
+                            (sqlite-select db (concat crate--match-names-sql " LIMIT ?")
+                                           (list pattern crate-completion-limit))
+                          (sqlite-select db crate--match-names-sql (list pattern)))))
             (sqlite-close db)))
       (error nil))))
 
 (defun crate--annotate (candidate)
   "Return the completion annotation for crate CANDIDATE."
-  (let* ((table (crate--list))
-         (data (when table
-                 (gethash (crate--canonical-name candidate) table)))
+  (let* ((data (crate--crate candidate))
          (desc (and data (gethash "description" data))))
     (when (and desc (not (eq desc :null))
                (not (string-empty-p desc)))
@@ -1138,15 +1268,14 @@ message naming the requested version.  Creates a new buffer named
             (message "crate: requested version %s ignored (showing latest)"
                      version)))))
     (setq cand (crate--canonical-name cand))
-    (let* ((data (crate--list))
-           (entry (when data (gethash cand data))))
+    (let ((entry (crate--crate cand)))
       ;; No database at all: blame the configuration, not the name.
-      (unless data
-        (if crate-data-path
-            (user-error "Crate database `%s' unreadable" crate-data-path)
-          (user-error "No crate database configured — set `crate-data-path'")))
+      (unless crate-data-path
+        (user-error "No crate database configured — set `crate-data-path'"))
       (unless entry
-        (user-error "Crate `%s' not found" cand))
+        (if (crate--database-readable-p)
+            (user-error "Crate `%s' not found" cand)
+          (user-error "Crate database `%s' unreadable" crate-data-path)))
       (let ((bufname (format "Crate: %s" cand)))
         (crate--display-buffer bufname)
         (crate-mode)
@@ -1961,10 +2090,7 @@ Embark passes its candidate directly."
                      (crate-browse--current-name))
                     (t (user-error "No crate to copy")))))
          (data (or (and crate-name (string= name crate-name) crate-data)
-                   (let ((table (crate--list)))
-                     (when table
-                       (or (gethash name table)
-                           (gethash (crate--canonical-name name) table))))))
+                   (crate--crate name)))
          (version (and data (gethash "latest_version" data)))
          (line (crate--dependency-line name version)))
     (kill-new line)

@@ -132,14 +132,17 @@ is nil. Callers must use `(cadddr item)` to get docs:
 1. Forward declarations and buffer-local state (`defvar-local`
    with `permanent-local` for `crate-name`, `crate-data`)
 2. defgroup / defcustom (including `crate--crates-io-url`
-   `defconst`)
+   `defconst`, and the limit custom options `crate-completion-limit`
+   and `crate-dependents-limit`)
 3. Cache (hash-table vars, `with-memoization`, cache keys include
-   `crate-data-path` for self-invalidation)
+   `crate-data-path` for self-invalidation; `crate--list` for the
+   whole table, `crate--crate` for one record, `crate--crates-columns`
+   and its two SQL constants)
 4. Doc Build (`crate-doc-enable` defcustom, `crate-doc--start-build`,
    `crate-doc--json-from-build`, `crate-doc--json`,
    `crate-doc--module-tree`)
 5. Helpers (`crate--description`, `crate--deps`, `crate--dependents`,
-   `crate--format-downloads`)
+   `crate--dependents-data`, `crate--format-downloads`)
 6. Faces (`defface` definitions, `crate-font-lock-keywords`)
 7. Text Buttons and Point Keeping (`crate-link` button type,
    `crate--line-record` and the restore helpers, which keep point
@@ -165,7 +168,8 @@ is nil. Callers must use `(cadddr item)` to get docs:
     visit, bookmarks, dependency buttons — and runs
     `crate-visit-hook` at the end, after `crate-name` and
     `crate-data` are set and the buffer rendered; the window comes
-    from `crate-display-buffer-action`)
+    from `crate-display-buffer-action`; the record comes from
+    `crate--crate`, so a visit reads one row)
 13. Bookmarks (`crate--bookmark-make-record-function`,
     `crate-bookmark-jump`)
 14. Org Integration (deferred load of `ol-crate`)
@@ -330,11 +334,38 @@ use `defconst`:
 
 ### Canonical crate names
 
-`crate--list` keys its hash by `crate--canonical-name` (downcase,
-hyphens to underscores), so every lookup canonicalizes input and
-stays single-form.  The entry's `"name"` field holds the published
-crate name — display, completion candidates, and URLs use it,
-never the hash key.  `"display_name"` holds the pretty form.
+`crate--canonical-name` (downcase, hyphens to underscores) is the
+single lookup form.  `crate--list` keys its hash by it, and
+`crate--crate` keys its cache by it.  The entry's `"name"` field
+holds the published crate name — display, completion candidates,
+and URLs use it, never the canonical form.  `"display_name"`
+holds the pretty form.
+
+A canonical form is not a published name, so `crate--crate` asks
+for both spellings (`crate--crate-spellings`): `async-trait` and
+`async_trait`.  Two spellings suffice, measured on a full dump of
+358 423 names: no published name mixes both separators, and no two
+names share a canonical form.
+
+### One crate record, not the whole table
+
+`crate--crate` reads one row through the `name` primary-key btree
+and memoizes that record.  `crate--list` reads every row into one
+hash table per crate, and a full dump makes that 358 423 hash
+tables: 1.8 s and +647 MiB of resident memory.  So the single-crate
+path takes `crate--crate` — `find-crate`, `crate--annotate`,
+`crate-doc--json`, `crate-copy-dependency`.  Only a view that needs
+every crate takes `crate--list` (`crate-browse--entries` without a
+name list, `crate--filter-by-name`), and it keeps the whole table.
+
+Measured on the 422 MB dump, `find-crate` for serde went from
+5.27 s to 0.09 s and from 1 022 MiB to 146 MiB.
+
+`crate--database-readable-p` separates two answers that
+`crate--crate` reports alike: a missing crate and an unreadable
+database both return nil.  `find-crate` asks it only on the nil
+path, so a missing crate still blames the name and a corrupt file
+still blames the path.
 
 ### Completion conventions
 
@@ -349,14 +380,29 @@ since `_` is a valid crate-name character; the prefix pattern
 matches the `complete-with-action' contract, and completion styles
 query with their own strings and filter further on top.
 
+**`crate--match-names` turns on `case_sensitive_like`.**  `LIKE`
+compares case-insensitively by default, and that keeps SQLite off
+the `name` primary-key btree: `EXPLAIN QUERY PLAN` answers `SCAN
+crates`, and one keystroke costs 50 ms on a full dump.  All
+published names are lowercase, so the connection sets the pragma
+and the prefix is downcased first.  The query then walks the btree
+and `crate-completion-limit` stops the walk: 0.03 ms.
+
+**Every candidate costs a row fetch, so the query stops at a
+limit.**  A prefix of one letter matches tens of thousands of
+names (35 628 under `s`), and each candidate also asks for its
+description through `crate--annotate`.  `crate-completion-limit`
+(default 200) caps that; a nil value fetches every match.
+
 ### Memoization
 
 JSON data and crate structure results use `with-memoization`
 on `(gethash key hash-table)`.  Since the SQLite database is a
 static file on disk, results never go stale — but they DO go
 stale across `crate-data-path` switches, so every cache key
-includes the path (`(list 'data crate-data-path)`, `(list 'deps
-path name)`, `(list name path)`, `(list 'keys path)`).  Plain
+includes the path (`(list 'data crate-data-path)`, `(list 'crate
+path canonical)`, `(list 'deps path name)`, `(list name path)`,
+`(list 'keys path)`).  Plain
 `setq` of `crate-data-path` then self-invalidates; no defcustom
 `:set` function needed.
 
@@ -385,6 +431,14 @@ where nil is a valid "don't recompute" outcome, use a sentinel:
 The async doc-build path (`crate-doc--json`) reads the cache
 directly instead — `with-memoization` fits synchronous computation
 only.
+
+**A cached result that is a list of names must not be nil.**
+`crate--dependents-data` stores `(NAMES . TRUNCATED)`, and a crate
+that nothing depends on stores `(nil . nil)` — a cons survives the
+`or` of `with-memoization`, a bare nil does not.  `crate--deps`
+solves the same problem with the `:failed` sentinel in reverse: it
+lets an empty row list recompute, which costs one indexed query of
+0.3 ms.
 
 ### Avoid `let-alist` on hash tables
 
@@ -523,6 +577,22 @@ child position.  `crate--child-count` answers nil for a zero count and
 for a reader who turned the option off, so no heading carries a zero.
 `crate--module-count` drops the `:null`-named use imports, which
 insert no section.
+
+**The Dependents section stops at `crate-dependents-limit`.**  A
+popular crate has over a hundred thousand dependents (serde has
+135 172), and one text button per dependent costs 1.3 s to render.
+`crate--dependents-data` asks SQLite for one name past the limit,
+so the section pays for no count it never shows, and the heading
+marks the cut list `(200+)`.  `magit-insert-heading` formats a
+count it receives, so that heading carries its two faces itself:
+the section face on the label and `magit-section-child-count` on
+the number.
+
+A covering index `(dep_name, crate_name)` on `dependencies` would
+make the capped query stream, measured 90 ms to 0.2 ms on the full
+dump, at the cost of +86.5 MB.  The stock crates.io dump does not
+carry it, and the query is memoized per crate, so the code does
+not need it.
 
 **The folds need no code of their own.**  A section keeps its
 visibility by ident in `magit-section-visibility-cache`, so
@@ -779,6 +849,15 @@ tests skip in a plain shell and run inside the Nix build.
 
 - `crate-test--data-hash` builds a mock `crate-data` hash table from
   keyword-value pairs (inner record, not keyed by crate name).
+- `crate-test--cache-crate` stores such a record where
+  `crate--crate` reads it, keyed by canonical name and database
+  path, so a test can exercise `find-crate` without a database.
+- `crate-test--insert-dependents` fills the `dependencies` table of a
+  fixture database, which the helper creates empty.
+- A test that mocks `sqlite-select` must mock `sqlite-execute` too:
+  `crate--match-names` sets `PRAGMA case_sensitive_like` first, and
+  an unmocked call raises, which the `condition-case` turns into a
+  nil answer.
 - `crate-test--crate-table` builds a mock top-level table keyed by
   crate name, suitable as the return value of `crate-list-json`.
 - `crate-test--with-crate` macro binds `crate-name` and `crate-data`

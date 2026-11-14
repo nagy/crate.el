@@ -180,6 +180,63 @@
         (should (equal (gethash "description" (gethash "serde" result))
                        "serialization"))))))
 
+(ert-deftest crate--crate-published-spellings ()
+  "A lookup reaches a published name from either spelling."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (tmpfile (crate-test--sqlite-db
+                  '("async-trait" :name "async-trait" :description "derive macros")
+                  '("rand_core" :name "rand_core" :description "core random"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (should (equal (gethash "description" (crate--crate "async-trait"))
+                         "derive macros"))
+          (should (equal (gethash "description" (crate--crate "rand-core"))
+                         "core random"))
+          ;; Downcased input reaches the same record.
+          (should (equal (gethash "name" (crate--crate "ASYNC-trait"))
+                         "async-trait")))
+      (delete-file tmpfile))))
+
+(ert-deftest crate--crate-memoized ()
+  "`crate--crate' answers from the cache after the file is gone."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (tmpfile (crate-test--sqlite-db
+                  '("serde" :name "serde" :description "serialization"))))
+    (let ((crate-data-path tmpfile))
+      (should (crate--crate "serde"))
+      (delete-file tmpfile)
+      (should (equal (gethash "description" (crate--crate "serde"))
+                     "serialization")))))
+
+(ert-deftest crate--crate-missing-name-is-cached ()
+  "A missing name queries once, then answers from the sentinel."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/mock-crates.db")
+        (calls 0))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select)
+               (lambda (&rest _) (cl-incf calls) nil))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (should-not (crate--crate "nope"))
+      (should-not (crate--crate "nope"))
+      (should (= calls 1)))))
+
+(ert-deftest crate--database-readable-p-detects-garbage ()
+  "A file that is not a database reads as unreadable."
+  (let ((garbage (make-temp-file "crate-test-" nil ".db"))
+        (good (crate-test--sqlite-db '("serde" :name "serde"))))
+    (unwind-protect
+        (progn
+          (with-temp-file garbage (insert "not a database"))
+          (let ((crate-data-path garbage))
+            (should-not (crate--database-readable-p)))
+          (let ((crate-data-path "/nonexistent/crate-data.db"))
+            (should-not (crate--database-readable-p)))
+          (let ((crate-data-path good))
+            (should (crate--database-readable-p))))
+      (delete-file garbage)
+      (delete-file good))))
 
 
 (ert-deftest crate-data-path-setq-self-invalidates ()
@@ -234,6 +291,37 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
       (let ((crate-data-path "/db1.db"))
         (should (equal (crate--dependents "serde") '("tokio" "axum")))))))
 
+(ert-deftest crate--dependents-truncates-at-the-limit ()
+  "`crate--dependents' stops at `crate-dependents-limit' and reports the cut."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-dependents-limit 2)
+        (tmpfile (crate-test--sqlite-db '("serde" :name "serde"))))
+    (unwind-protect
+        (progn
+          (crate-test--insert-dependents tmpfile '("alpha" "beta" "gamma"))
+          (let ((crate-data-path tmpfile))
+            (should (equal (crate--dependents "serde") '("alpha" "beta")))
+            (should (crate--dependents-truncated-p "serde"))
+            (let ((crate-dependents-limit nil))
+              (crate-refresh-cache)
+              (should (equal (crate--dependents "serde")
+                             '("alpha" "beta" "gamma")))
+              (should-not (crate--dependents-truncated-p "serde")))))
+      (delete-file tmpfile))))
+
+(ert-deftest crate--dependents-empty-result-is-cached ()
+  "A crate that nothing depends on queries once, not on every render."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/mock-crates.db")
+        (calls 0))
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-select) (lambda (&rest _) (cl-incf calls) nil))
+              ((symbol-function 'sqlite-close) #'ignore))
+      (should-not (crate--dependents "serde"))
+      (should-not (crate--dependents "serde"))
+      (should (= calls 1)))))
+
 (ert-deftest crate-mode-renders-dependents ()
   "Dependents render as a clickable section in `crate-mode'."
   (let ((crate--data-cache (make-hash-table :test 'equal)))
@@ -248,6 +336,26 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
             (should (string-match-p "Dependents" content))
             (should (string-match-p "tokio" content))
             (should (string-match-p "axum" content))))))))
+
+(ert-deftest crate-mode-dependents-heading-marks-a-cut-list ()
+  "A truncated Dependents heading carries a plus sign."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-dependents-limit 2)
+        (crate-doc-enable nil)
+        (tmpfile (crate-test--sqlite-db '("serde" :name "serde"))))
+    (unwind-protect
+        (progn
+          (crate-test--insert-dependents tmpfile '("alpha" "beta" "gamma"))
+          (let ((crate-data-path tmpfile))
+            (with-temp-buffer
+              (crate-mode)
+              (setq-local crate-name "serde")
+              (setq-local crate-data (crate--crate "serde"))
+              (crate--render)
+              (goto-char (point-min))
+              (should (search-forward "Dependents (2+)" nil t))
+              (should-not (search-forward "gamma" nil t)))))
+      (delete-file tmpfile))))
 
 
 (ert-deftest crate--deps-memoized ()
@@ -967,12 +1075,10 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
   "A nil `crate-display-buffer-action' keeps `switch-to-buffer'."
   (let ((crate-display-buffer-action nil)
         (crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/mock-crates.db")
         (crate-doc-enable nil)
         (switched nil) (popped nil))
-    (puthash (list 'data crate-data-path)
-             (crate-test--crate-table
-              '("serde" :name "serde" :latest_version "1.0.0"))
-             crate--data-cache)
+    (crate-test--cache-crate "serde" :name "serde" :latest_version "1.0.0")
     (cl-letf (((symbol-function 'switch-to-buffer)
                (lambda (&rest _) (setq switched t)))
               ((symbol-function 'pop-to-buffer)
@@ -986,12 +1092,10 @@ Covers `crate--list' across nil -> db1 -> db2 switches."
   "`find-crate' routes a display action to `pop-to-buffer'."
   (let ((crate-display-buffer-action crate--other-window-action)
         (crate--data-cache (make-hash-table :test 'equal))
+        (crate-data-path "/mock-crates.db")
         (crate-doc-enable nil)
         (action :unset) (name nil))
-    (puthash (list 'data crate-data-path)
-             (crate-test--crate-table
-              '("serde" :name "serde" :latest_version "1.0.0"))
-             crate--data-cache)
+    (crate-test--cache-crate "serde" :name "serde" :latest_version "1.0.0")
     (cl-letf (((symbol-function 'pop-to-buffer)
                (lambda (buffer &optional act) (setq name buffer action act)))
               ((symbol-function 'cd) #'ignore))
@@ -1319,9 +1423,9 @@ Substituted at build time by default.nix.")
 (ert-deftest crate-copy-dependency-from-browse ()
   "Copies the line for the entry at point in `crate-browse-mode'."
   (let ((kill-ring nil) (kill-ring-yank-pointer nil))
-    (cl-letf (((symbol-function 'crate--list)
-               (lambda () (crate-test--crate-table
-                           '("tokio" :name "tokio" :latest_version "1.40.0"))))
+    (cl-letf (((symbol-function 'crate--crate)
+               (lambda (_name)
+                 (crate-test--data-hash :name "tokio" :latest_version "1.40.0")))
               ((symbol-function 'crate-browse--current-name) (lambda () "tokio"))
               ((symbol-function 'message) (lambda (&rest _) nil)))
       (with-temp-buffer
@@ -1332,8 +1436,8 @@ Substituted at build time by default.nix.")
 (ert-deftest crate-copy-dependency-missing-version ()
   "A missing version falls back to \"*\" (still valid TOML)."
   (let ((kill-ring nil) (kill-ring-yank-pointer nil))
-    (cl-letf (((symbol-function 'crate--list)
-               (lambda () (crate-test--crate-table '("foo" :name "foo"))))
+    (cl-letf (((symbol-function 'crate--crate)
+               (lambda (_name) (crate-test--data-hash :name "foo")))
               ((symbol-function 'crate-browse--current-name) (lambda () "foo"))
               ((symbol-function 'message) (lambda (&rest _) nil)))
       (with-temp-buffer
@@ -1922,9 +2026,11 @@ dependency name and the docs.rs fallback alike."
 
 (ert-deftest crate--match-names-prefix-query ()
   "`crate--match-names' queries per call with escaped prefix patterns."
-  (let ((captured nil))
+  (let ((captured nil) (pragmas nil))
     (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
               ((symbol-function 'sqlite-open) #'ignore)
+              ((symbol-function 'sqlite-execute)
+               (lambda (_db sql) (push sql pragmas)))
               ((symbol-function 'sqlite-select)
                (lambda (_db _sql params)
                  (setq captured (car params))
@@ -1934,7 +2040,29 @@ dependency name and the docs.rs fallback alike."
         (should (equal (crate--match-names "tok") '("tokio" "tokio-macros")))
         ;; Underscore input escaped — never a LIKE wildcard.
         (crate--match-names "tokio_")
-        (should (equal captured "tokio\\_%"))))))
+        (should (equal captured "tokio\\_%"))
+        ;; The prefix is downcased, because the connection makes LIKE
+        ;; case-sensitive so that SQLite walks the name btree.
+        (crate--match-names "TOKIO_")
+        (should (equal captured "tokio\\_%"))
+        ;; Every query turns the pragma on first.
+        (should (seq-every-p (lambda (sql) (string-match-p "case_sensitive_like" sql))
+                             pragmas))))))
+
+(ert-deftest crate--match-names-honors-the-limit ()
+  "A short prefix returns at most `crate-completion-limit' names."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-completion-limit 2)
+        (tmpfile (crate-test--sqlite-db
+                  '("tokio" :name "tokio")
+                  '("tokio-auth" :name "tokio-auth")
+                  '("tokio-util" :name "tokio-util"))))
+    (unwind-protect
+        (let ((crate-data-path tmpfile))
+          (should (= (length (crate--match-names "tokio")) 2))
+          (let ((crate-completion-limit nil))
+            (should (= (length (crate--match-names "tokio")) 3))))
+      (delete-file tmpfile))))
 
 (ert-deftest crate-completion-collection-matches-prefix ()
   "The collection offers names matching the typed prefix under any style."

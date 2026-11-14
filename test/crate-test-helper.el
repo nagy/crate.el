@@ -99,6 +99,28 @@ the return value of `crate--list'."
                  do (puthash (substring (symbol-name prop) 1) val inner))
         (puthash (car e) inner table)))))
 
+(defun crate-test--cache-crate (name &rest props)
+  "Store a mock crate record for NAME in `crate--data-cache'.
+PROPS are keyword-value pairs like `crate-test--data-hash'.  The
+record answers `crate--crate' without a database, keyed the way
+`crate--crate' keys its cache."
+  (puthash (list 'crate crate-data-path (crate--canonical-name name))
+           (apply #'crate-test--data-hash props)
+           crate--data-cache))
+
+(defun crate-test--insert-dependents (dbpath names)
+  "Insert a `dependencies' row into DBPATH for each name in NAMES.
+Each row records that the named crate depends on serde.  DBPATH
+comes from `crate-test--sqlite-db'."
+  (let ((db (sqlite-open dbpath)))
+    (unwind-protect
+        (dolist (name names)
+          (sqlite-execute db
+                          "INSERT INTO dependencies (crate_name, dep_name, req)
+                           VALUES (?, 'serde', '^1')"
+                          (list name)))
+      (sqlite-close db))))
+
 (defmacro crate-test--with-crate (name data &rest body)
   "Bind `crate-name' to NAME and `crate-data' to DATA, then evaluate BODY.
 DATA should be a hash table of field keys to values (the inner
