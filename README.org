@@ -161,6 +161,10 @@ every filter.  =RET= opens the source of a local crate, =C-c C-o=
 opens the docs.rs page, =y= copies the item path, =w= copies a
 =Cargo.toml= line, and =g= rebuilds the document.
 
+The file cell shows the base name alone.  It keeps the whole name in a
+text property, so =thing-at-point= and Embark still reach the file of
+a row.  An Embark file action on =lib.rs:12= opens the real =lib.rs=.
+
 =C-x r m= saves the view as a bookmark, and the jump restores the
 folds, the filters, the depth, the sort and the row at point.  A local
 crate runs =cargo doc= with JSON output, which needs =cargo=,

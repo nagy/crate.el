@@ -435,6 +435,45 @@ fixture crate derives nothing, so this document stands in."
       (should (string-match-p "api.rs:1" line))
       (should (string-match-p "Request handling." line)))))
 
+(ert-deftest crate-tree-location-cell-keeps-the-file ()
+  "A Location cell shows the base name, and keeps the real file."
+  (let ((cell (crate-tree--location-cell
+               (crate-tree-item--create :span (list "src/lib.rs" 12)))))
+    (should (equal cell "lib.rs:12"))
+    (should (equal (get-text-property 0 'crate-file cell) "src/lib.rs")))
+  (should (equal (crate-tree--location-cell (crate-tree-item--create)) "")))
+
+(ert-deftest crate-tree-thing-at-point-file ()
+  "`thing-at-point' answers the source file of the Location cell."
+  (with-temp-buffer
+    (insert (crate-tree--location-cell
+             (crate-tree-item--create :span (list "src/lib.rs" 12))))
+    (crate-tree-mode)
+    (setq crate-tree--directory "/tmp/crate-tree-test/")
+    (goto-char (point-min))
+    (should (equal (thing-at-point 'filename)
+                   "/tmp/crate-tree-test/src/lib.rs"))
+    ;; A database crate carries no source on disk.
+    (setq crate-tree--directory nil)
+    (should-not (crate-tree--thing-at-point-file))))
+
+(ert-deftest crate-tree-embark-target-file-at-point ()
+  "The finder targets the source file, and stays quiet on plain text."
+  (with-temp-buffer
+    (insert (crate-tree--location-cell
+             (crate-tree-item--create :span (list "src/lib.rs" 12))))
+    (crate-tree-mode)
+    (setq crate-tree--directory "/tmp/crate-tree-test/")
+    (goto-char (point-min))
+    (let ((target (crate-tree--embark-target-file-at-point)))
+      (should (eq (car target) 'file))
+      (should (equal (cadr target) "/tmp/crate-tree-test/src/lib.rs"))
+      (should (equal (cddr target) (cons (point-min) (point-max))))))
+  (with-temp-buffer
+    (insert "plain text")
+    (goto-char (point-min))
+    (should-not (crate-tree--embark-target-file-at-point))))
+
 (ert-deftest crate-tree-mode-toggle-folds ()
   "`TAB' hides the children of the row at point."
   (crate-tree-test--with-buffer

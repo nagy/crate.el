@@ -567,6 +567,23 @@ back to the entry ID, so any cell answers the crate URL.  Only the name
 cell carries `crate-url`, because `equal` on a cell and a bare string
 must stay true and the export strips properties.
 
+`crate-tree-mode` adds `crate-tree--thing-at-point-file` for
+`filename`.  The Location cell shows the base name and the line alone,
+so a reader that parses the text cannot reach the file.  The cell
+carries the name that rustdoc wrote in a `crate-file` text property,
+and the provider resolves it through `crate-tree--source-file`, the way
+`crate-tree-visit` does.  A row of a database crate resolves to nil,
+because the tree holds no source on disk.
+
+A `file` target also needs `crate-tree--embark-target-file-at-point`,
+because `embark-target-file-at-point` asks `ffap-file-at-point` about
+the cell text and guesses a file in the wrong directory.  The finder
+reads the property and answers `(file PATH BEG . END)`; it lives under
+its own `;;; Embark` heading with a value-less `embark-target-finders`
+defvar, and `with-eval-after-load 'embark` adds it to that hook.
+`add-hook` prepends, so the finder runs before the builtin ones, and it
+answers nil in every buffer without the property.
+
 ### One text button type for links
 
 `crate-link` carries the `crate-url` face, the `mouse-face`, the
@@ -773,6 +790,7 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 | goto-addr | yes | links the URLs of a detail buffer |
 | magit-section | yes | folds, highlights, section motions |
 | evil | soft | optional key layer in `evil-crate.el` |
+| embark | soft | export, candidate actions, and a file target finder for a shortened Location cell |
 | nix (external) | soft | on-demand rustdoc JSON when `crate-doc-enable` is t |
 
 ## TODO

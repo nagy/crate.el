@@ -36,6 +36,7 @@
 
 (require 'cl-lib)
 (require 'tabulated-list)
+(require 'thingatpt)
 (require 'crate)
 
 (declare-function browse-url "browse-url" (url &rest args))
@@ -615,6 +616,12 @@ page, and \\[crate-tree-copy-path] copies its item path."
   (setq-local revert-buffer-function #'crate-tree--revert)
   (setq-local bookmark-make-record-function
               #'crate-tree--bookmark-make-record)
+  ;; A Location cell shows the base name alone, so a text property
+  ;; keeps the file that rustdoc wrote.  `thing-at-point' reads that
+  ;; property through the provider.
+  (setq-local thing-at-point-provider-alist
+              (cons '(filename . crate-tree--thing-at-point-file)
+                    thing-at-point-provider-alist))
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
@@ -986,13 +993,27 @@ start."
               'face 'crate-tree-visibility))
 
 (defun crate-tree--location-cell (item)
-  "Return the location cell of ITEM."
+  "Return the location cell of ITEM.
+The cell shows the base name alone, and its `crate-file' text
+property names the file that rustdoc wrote, so `thing-at-point' and
+Embark reach the source."
   (if-let* ((span (crate-tree-item-span item)))
       (propertize (format "%s:%s"
                           (file-name-nondirectory (car span))
                           (cadr span))
-                  'face 'crate-tree-location)
+                  'face 'crate-tree-location
+                  'crate-file (car span))
     ""))
+
+(defun crate-tree--thing-at-point-file ()
+  "Return the source file of the Location cell at point, or nil.
+Serves as a `thing-at-point-provider-alist' entry for
+`crate-tree-mode'.  The `crate-file' text property holds the file that
+rustdoc wrote, and `crate-tree--source-file' resolves it the way
+`crate-tree-visit' does."
+  (when-let* ((file (get-text-property (point) 'crate-file))
+              (directory crate-tree--directory))
+    (crate-tree--source-file directory file)))
 
 (defun crate-tree--docs-cell (item)
   "Return the doc summary cell of ITEM."
@@ -1350,6 +1371,36 @@ this command signals a `user-error' there."
       (find-file (crate-tree--source-file crate-tree--directory (car span)))
       (goto-char (point-min))
       (forward-line (1- (cadr span))))))
+
+;;; Embark
+
+;; Value-less defvar: silence the byte-compiler without binding the
+;; variable, so the `defcustom' default of Embark survives when
+;; crate-tree.el loads first.
+(defvar embark-target-finders)
+
+(defun crate-tree--property-bounds (property)
+  "Return the bounds of PROPERTY around point, or nil.
+The bounds cover the cell text that carries PROPERTY, the way Embark
+finds the extent of a `shr-url'."
+  (when (get-text-property (point) property)
+    (cons (previous-single-property-change
+           (min (1+ (point)) (point-max)) property nil (point-min))
+          (next-single-property-change (point) property nil (point-max)))))
+
+(defun crate-tree--embark-target-file-at-point ()
+  "Target the source file of the Location cell at point.
+The cell shows the base name alone, so `ffap-file-at-point' guesses a
+file in the wrong directory.  This finder reads the `crate-file' text
+property instead, and answers nil outside a row that carries one."
+  (when-let* ((file (crate-tree--thing-at-point-file))
+              (bounds (crate-tree--property-bounds 'crate-file)))
+    (cons 'file (cons file bounds))))
+
+(with-eval-after-load 'embark
+  ;; `add-hook' prepends by default, so the finder runs before the
+  ;; builtin ones, and it answers nil in every other buffer.
+  (add-hook 'embark-target-finders #'crate-tree--embark-target-file-at-point))
 
 (provide 'crate-tree)
 
