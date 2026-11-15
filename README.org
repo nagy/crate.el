@@ -100,6 +100,28 @@ A dependency name and the URL fields are links, so =RET= on a
 dependency opens it and =RET= on a URL opens the browser.  =w= copies a
 =Cargo.toml= dependency line.
 
+* Short links
+
+A long store path and a long URL can print short.  Both shortenings
+come from another package, and both stay optional.
+
+With tired loaded, =tired-shorten-path= applies
+=tired-shorthand-rules= to a printed path, so a Path field follows the
+rule that the reader sets for a Dired target.  With buffer-url loaded,
+=buffer-url-pretty-print= strips the scheme and applies
+=buffer-url-shorten-alist= to a printed URL:
+
+#+begin_src elisp
+  (setopt buffer-url-shorten-alist
+          '(("github.com/example/" . "example/")))
+#+end_src
+
+A shortened URL becomes a link button, because =goto-address-mode=
+needs a scheme in the text.  The buffer text keeps the real value in a
+text property, so =thing-at-point=, Embark and every command still
+reach the real path and the real URL.  A reader without either package
+sees the full value.
+
 * Local crates
 
 =M-x crate-visit-directory= opens the crate of a local directory.  The

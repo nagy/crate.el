@@ -74,6 +74,11 @@
 (defvar browse-url-default-handlers)
 (defvar thing-at-point-provider-alist)
 
+;; Tired and buffer-url are optional: the display helpers guard on
+;; `fboundp'.
+(declare-function tired-shorten-path "tired-core")
+(declare-function buffer-url-pretty-print "buffer-url")
+
 (defvar-local crate-name nil)
 (defvar-local crate-data nil)
 (defvar-local crate-local-path nil)
@@ -774,6 +779,52 @@ description is missing or :null."
         it)
       ""))
 
+(defun crate--display-path (path)
+  "Return PATH shortened for display, or PATH unchanged.
+A local absolute path goes through `abbreviate-file-name' first, so a
+shorthand rule matches the text that the reader sees.  When tired is
+loaded, `tired-shorten-path' applies `tired-shorthand-rules'.
+
+The result is display text alone, and the `crate-path' text property
+names the real path.  `crate-local-path' and every command keep the
+real path too, so a shortened value never reaches the file system."
+  (if (not (stringp path))
+      path
+    (let ((abbreviated (abbreviate-file-name path)))
+      (propertize (if (fboundp 'tired-shorten-path)
+                      (tired-shorten-path abbreviated)
+                    abbreviated)
+                  'crate-path path))))
+
+(defun crate--display-url (url)
+  "Return URL shortened for display, or URL unchanged.
+When buffer-url is loaded, `buffer-url-pretty-print' strips the
+scheme and applies `buffer-url-shorten-alist', so a host name shows as
+the short label that a reader sets.
+
+The result is display text alone, and the `crate-url' text property
+names the real URL.  A button action and every command keep the real
+URL too, so a shortened value never reaches `browse-url'."
+  (if (and (stringp url)
+           (string-match-p "\\`https?://" url)
+           (fboundp 'buffer-url-pretty-print))
+      (propertize (buffer-url-pretty-print url) 'crate-url url)
+    url))
+
+(defun crate--insert-url (url)
+  "Insert URL as a link, shortened for display.
+`goto-address-mode' cannot detect a label that lost its scheme, so a
+shortened label becomes a `crate-link' button that carries the real
+URL.  A label that no prettifier shortens stays plain text, and
+`goto-address-mode' links it."
+  (let ((label (crate--display-url url)))
+    (if (equal label url)
+        (insert url)
+      (insert-text-button label
+                          :type 'crate-link
+                          'crate-url url
+                          'help-echo (format "Open %s" url)))))
+
 (defun crate--deps (name)
   "Return dependency rows for crate NAME from the SQLite database.
 Each row is `(DEP_NAME REQ KIND OPTIONAL)'."
@@ -1077,9 +1128,11 @@ the field."
     (pcase key
       ('name (insert (or (gethash "name" crate-data) crate-name)))
       ('description (insert (crate--description)))
+      ('homepage (crate--insert-url-value "homepage"))
       ('repository (crate--insert-repository))
       ('documentation (crate--insert-documentation))
       ('downloads (crate--insert-downloads))
+      ('path (crate--insert-path))
       (_ (crate--insert-value (symbol-name key))))
     (insert "\n")))
 
@@ -1090,15 +1143,27 @@ Nothing follows the label when the value is nil or a JSON null."
     (unless (or (null value) (eq value :null))
       (insert value))))
 
+(defun crate--insert-url-value (key)
+  "Insert the URL of KEY from `crate-data' as a link."
+  (let ((url (gethash key crate-data)))
+    (unless (or (null url) (eq url :null))
+      (crate--insert-url url))))
+
+(defun crate--insert-path ()
+  "Insert the local path of the crate, shortened for display."
+  (let ((path (gethash "path" crate-data)))
+    (unless (or (null path) (eq path :null))
+      (insert (crate--display-path path)))))
+
 (defun crate--insert-downloads ()
   "Insert the download count of `crate-data', formatted for reading."
   (when-let* ((count (gethash "downloads" crate-data)))
     (insert (crate--format-downloads count))))
 
 (defun crate--insert-repository ()
-  "Insert the repository URL and select its local checkout.
+  "Insert the repository URL as a link, and select its local checkout.
 A local crate makes its own directory the `default-directory'."
-  (crate--insert-value "repository")
+  (crate--insert-url-value "repository")
   (if crate-local-path
       (setq-local default-directory (file-name-as-directory crate-local-path))
     (when-let* ((repo (gethash "repository" crate-data))
@@ -1122,14 +1187,14 @@ A local crate makes its own directory the `default-directory'."
   "Insert the documentation URL, or a link to the docs.rs page."
   (let ((doc (gethash "documentation" crate-data)))
     (if (and doc (not (eq doc :null)))
-        (insert doc)
+        (crate--insert-url doc)
       (let ((url (format "https://docs.rs/%s"
                          (downcase (string-replace "_" "-"
                                                    (or (gethash "name" crate-data)
                                                        crate-name))))))
-        (insert-text-button url
+        (insert-text-button (crate--display-url url)
                             :type 'crate-link
-                            'action (lambda (_) (browse-url url))
+                            'crate-url url
                             'help-echo "Open documentation on docs.rs")))))
 
 (defun crate-insert-fields ()
@@ -1290,6 +1355,13 @@ Returns nil unless point is on text carrying a `crate-url'
 property."
   (get-text-property (point) 'crate-url))
 
+(defun crate--thing-at-point-file ()
+  "Return the local crate path of the text at point, or nil.
+Serves as a `thing-at-point-provider-alist' entry for `crate-mode'.
+The `crate-path' text property holds the path that a shortened label
+stands for."
+  (get-text-property (point) 'crate-path))
+
 (defvar-keymap crate-mode-map
   :doc "Keymap for `crate-mode'."
   :parent magit-section-mode-map
@@ -1318,10 +1390,12 @@ the mode is set up."
               #'crate--bookmark-make-record-function)
   (setq-local revert-buffer-function #'crate--revert)
   ;; Make dependency crate names detectable as crates.io URLs by
-  ;; `thing-at-point' / `browse-url-at-point'.
+  ;; `thing-at-point' / `browse-url-at-point', and a shortened path
+  ;; reachable as a file through its text property.
   (setq-local thing-at-point-provider-alist
               (cons '(url . crate--thing-at-point-url)
-                    thing-at-point-provider-alist))
+                    (cons '(filename . crate--thing-at-point-file)
+                          thing-at-point-provider-alist)))
   ;; `crate-data' is set after the mode (by `find-crate'), so the
   ;; description isn't available here; `crate--render' fills the buffer.
   (setq-local list-buffers-directory nil))
@@ -2342,6 +2416,7 @@ sections."
 (defvar embark-exporters-alist)
 (defvar embark-keymap-alist)
 (defvar embark-general-map)
+(defvar embark-target-finders)
 
 (defun crate--embark-export (candidates)
   "Export crate CANDIDATES for Embark.
@@ -2356,6 +2431,24 @@ can re-derive the results."
   "Open CAND on crates.io."
   (browse-url (concat crate--crates-io-url cand)))
 
+(defun crate--property-bounds (property)
+  "Return the bounds of PROPERTY around point, or nil.
+The bounds cover the text that carries PROPERTY, the way Embark finds
+the extent of a `shr-url'."
+  (when (get-text-property (point) property)
+    (cons (previous-single-property-change
+           (min (1+ (point)) (point-max)) property nil (point-min))
+          (next-single-property-change (point) property nil (point-max)))))
+
+(defun crate--embark-target-file-at-point ()
+  "Target the real path of the display text at point.
+A shortened path defeats `ffap-file-at-point', which reads the buffer
+text.  This finder reads the `crate-path' text property instead, and
+answers nil in every buffer without one."
+  (when-let* ((path (get-text-property (point) 'crate-path))
+              (bounds (crate--property-bounds 'crate-path)))
+    (cons 'file (cons path bounds))))
+
 (with-eval-after-load 'embark
   (defvar-keymap crate-embark-map
     :doc "Embark actions for crate candidates."
@@ -2367,7 +2460,9 @@ can re-derive the results."
   (add-to-list 'embark-exporters-alist
                '(crate . crate--embark-export))
   (add-to-list 'embark-keymap-alist
-               '(crate . crate-embark-map)))
+               '(crate . crate-embark-map))
+  ;; `add-hook' prepends, so the finder runs before the builtin ones.
+  (add-hook 'embark-target-finders #'crate--embark-target-file-at-point))
 
 (provide 'crate)
 ;;; crate.el ends here

@@ -475,10 +475,41 @@ buffer first and removes a `face` property that no keyword matches.
 `crate-mode` enables `goto-address-mode` through `crate-goto-address`
 (default t), which links the homepage, repository and documentation
 URLs with an evaporating overlay.  A renderer never sets `mouse-face`
-on a URL.
+on a URL that stays plain text.
+
+A URL that a prettifier shortens becomes a `crate-link` button
+instead.  `goto-address-mode` detects no scheme in the shortened
+label, so an overlay would leave the field dead.  `crate--insert-url`
+compares the label with the URL, inserts plain text when they match,
+and inserts a button when they differ.  The button carries the real
+URL in `crate-url`, and the `crate-link` type browses it.
 
 `RET` is `push-button`.  The `keymap` text property of a `crate-link`
 button wins over the major mode map.
+
+### Shortened links
+
+`crate--display-path` shortens a printed path, and
+`crate--display-url` shortens a printed URL.  Both packages behind them
+stay optional: tired supplies `tired-shorten-path`, buffer-url
+supplies `buffer-url-pretty-print`, and each helper guards on `fboundp`
+with a `declare-function` for the byte compiler.  Nothing loads them.
+
+The helpers return display text alone, and a text property names the
+real value: `crate-path` for a path and `crate-url` for a URL.  The
+field record, `crate-local-path`, the buttons and every command keep
+the real value, so a shortened string never reaches the file system or
+`browse-url`.
+
+`crate--display-path` sends an absolute path through
+`abbreviate-file-name` first, so a tired shorthand rule matches the
+`~/...` text that the reader sees.  `crate--display-url` shortens only
+an http or https URL, because `buffer-url-pretty-print` replaces host
+names by plain text match and would mangle another value.
+
+The helpers cover the Homepage, Repository, Documentation and Path
+fields, and the docs.rs fallback button.  A dependency name stays
+plain, because its label names a crate and not a URL.
 
 ### Point keeping across a render
 
@@ -566,6 +597,17 @@ explicitly, because a value-less `defvar` leaves the variable void.
 back to the entry ID, so any cell answers the crate URL.  Only the name
 cell carries `crate-url`, because `equal` on a cell and a bare string
 must stay true and the export strips properties.
+
+`crate-mode` adds `crate--thing-at-point-file` for `filename`, so a
+shortened Path field answers `thing-at-point 'filename`.  A shortened
+path also needs `crate--embark-target-file-at-point`, because
+`embark-target-file-at-point` asks `ffap-file-at-point` about the
+buffer text and finds nothing in a short label.  The finder returns
+`(file PATH BEG . END)` from the `crate-path` property, and nil in
+every buffer without one.  `with-eval-after-load 'embark` adds it to
+`embark-target-finders`, where `add-hook` puts it before the builtin
+finders.  `crate--property-bounds` gives the bounds of a property
+around point, and the finder of the crate tree uses it too.
 
 `crate-tree-mode` adds `crate-tree--thing-at-point-file` for
 `filename`.  The Location cell shows the base name and the line alone,
@@ -790,6 +832,8 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 | goto-addr | yes | links the URLs of a detail buffer |
 | magit-section | yes | folds, highlights, section motions |
 | evil | soft | optional key layer in `evil-crate.el` |
+| tired | soft | `tired-shorten-path` applies the reader's `tired-shorthand-rules` to a printed path; `crate--display-path` guards on `fboundp` |
+| buffer-url | soft | `buffer-url-pretty-print` applies the reader's `buffer-url-shorten-alist` to a printed URL; `crate--display-url` guards on `fboundp` |
 | embark | soft | export, candidate actions, and a file target finder for a shortened Location cell |
 | nix (external) | soft | on-demand rustdoc JSON when `crate-doc-enable` is t |
 

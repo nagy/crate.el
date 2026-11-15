@@ -1911,6 +1911,79 @@ dependency name and the docs.rs fallback alike."
             (should (eq (get-text-property (point) 'mouse-face)
                         'highlight))))))))
 
+(ert-deftest crate-display-path-keeps-the-real-path ()
+  "A shortened path carries the real path in a text property."
+  (cl-letf (((symbol-function 'tired-shorten-path) #'file-name-nondirectory))
+    (let ((text (crate--display-path "/nix/store/abc-source")))
+      (should (equal text "abc-source"))
+      (should (equal (get-text-property 0 'crate-path text)
+                     "/nix/store/abc-source"))))
+  (should-not (fboundp 'tired-shorten-path))
+  (let* ((path (expand-file-name "~/crate"))
+         (text (crate--display-path path)))
+    (should (equal text "~/crate"))
+    (should (equal (get-text-property 0 'crate-path text) path))))
+
+(ert-deftest crate-display-url-keeps-the-real-url ()
+  "A shortened URL carries the real URL in a text property."
+  (cl-letf (((symbol-function 'buffer-url-pretty-print)
+             (lambda (url) (string-remove-prefix "https://" url))))
+    (let ((text (crate--display-url "https://example.com/demo")))
+      (should (equal text "example.com/demo"))
+      (should (equal (get-text-property 0 'crate-url text)
+                     "https://example.com/demo"))))
+  (should-not (fboundp 'buffer-url-pretty-print))
+  (should (equal (crate--display-url "https://example.com/demo")
+                 "https://example.com/demo")))
+
+(ert-deftest crate-mode-shortens-the-homepage ()
+  "A shortened homepage becomes a link button that keeps the real URL."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'buffer-url-pretty-print)
+               (lambda (url) (string-remove-prefix "https://" url))))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash
+                               :name "test-crate"
+                               :homepage "https://example.com/demo")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (should-not (string-match-p "https://" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "example.com/demo")
+          (goto-char (match-beginning 0))
+          (should (eq (button-type (button-at (point))) 'crate-link))
+          (should (equal (button-get (button-at (point)) 'crate-url)
+                         "https://example.com/demo"))
+          (should (equal (thing-at-point 'url)
+                         "https://example.com/demo")))))))
+
+(ert-deftest crate-mode-shortens-the-path-field ()
+  "A shortened Path field keeps the real path for a reader."
+  (let ((crate--data-cache (make-hash-table :test 'equal))
+        (crate-doc-enable nil)
+        (crate-detail-fields '((path . "Path"))))
+    (cl-letf (((symbol-function 'crate--deps) #'ignore)
+              ((symbol-function 'crate--dependents) #'ignore)
+              ((symbol-function 'tired-shorten-path) #'file-name-nondirectory))
+      (crate-test--with-crate "test-crate"
+                              (crate-test--data-hash
+                               :name "test-crate"
+                               :path "/nix/store/abc-source")
+        (with-temp-buffer
+          (crate-mode)
+          (crate--render)
+          (goto-char (point-min))
+          (search-forward "abc-source")
+          (goto-char (match-beginning 0))
+          (should (equal (thing-at-point 'filename) "/nix/store/abc-source"))
+          (let ((target (crate--embark-target-file-at-point)))
+            (should (eq (car target) 'file))
+            (should (equal (cadr target) "/nix/store/abc-source"))))))))
+
 (ert-deftest crate-mode-renders-dependency-buttons ()
   "Dependency rows render with name, req, kind, and optional marker."
   (let ((crate--data-cache (make-hash-table :test 'equal)))

@@ -1379,22 +1379,13 @@ this command signals a `user-error' there."
 ;; crate-tree.el loads first.
 (defvar embark-target-finders)
 
-(defun crate-tree--property-bounds (property)
-  "Return the bounds of PROPERTY around point, or nil.
-The bounds cover the cell text that carries PROPERTY, the way Embark
-finds the extent of a `shr-url'."
-  (when (get-text-property (point) property)
-    (cons (previous-single-property-change
-           (min (1+ (point)) (point-max)) property nil (point-min))
-          (next-single-property-change (point) property nil (point-max)))))
-
 (defun crate-tree--embark-target-file-at-point ()
   "Target the source file of the Location cell at point.
 The cell shows the base name alone, so `ffap-file-at-point' guesses a
 file in the wrong directory.  This finder reads the `crate-file' text
 property instead, and answers nil outside a row that carries one."
   (when-let* ((file (crate-tree--thing-at-point-file))
-              (bounds (crate-tree--property-bounds 'crate-file)))
+              (bounds (crate--property-bounds 'crate-file)))
     (cons 'file (cons file bounds))))
 
 (with-eval-after-load 'embark
