@@ -2440,6 +2440,19 @@ the extent of a `shr-url'."
            (min (1+ (point)) (point-max)) property nil (point-min))
           (next-single-property-change (point) property nil (point-max)))))
 
+(defun crate--embark-target-url-at-point ()
+  "Target the real URL of the display text at point.
+`embark-target-url-at-point' reads the URL through `thing-at-point',
+which answers from the `crate-url' property, but it takes the bounds
+from `thing-at-point-bounds-of-url-at-point', which parses the buffer
+text.  A short label therefore gives a span that starts inside the
+label, or no span at all when the URL regexp cannot parse it.  This
+finder reads the property for both, and answers nil in every buffer
+without one."
+  (when-let* ((url (get-text-property (point) 'crate-url))
+              (bounds (crate--property-bounds 'crate-url)))
+    (cons 'url (cons url bounds))))
+
 (defun crate--embark-target-file-at-point ()
   "Target the real path of the display text at point.
 A shortened path defeats `ffap-file-at-point', which reads the buffer
@@ -2461,8 +2474,9 @@ answers nil in every buffer without one."
                '(crate . crate--embark-export))
   (add-to-list 'embark-keymap-alist
                '(crate . crate-embark-map))
-  ;; `add-hook' prepends, so the finder runs before the builtin ones.
-  (add-hook 'embark-target-finders #'crate--embark-target-file-at-point))
+  ;; `add-hook' prepends, so the finders run before the builtin ones.
+  (add-hook 'embark-target-finders #'crate--embark-target-file-at-point)
+  (add-hook 'embark-target-finders #'crate--embark-target-url-at-point))
 
 (provide 'crate)
 ;;; crate.el ends here

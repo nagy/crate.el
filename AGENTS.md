@@ -609,6 +609,16 @@ every buffer without one.  `with-eval-after-load 'embark` adds it to
 finders.  `crate--property-bounds` gives the bounds of a property
 around point, and the finder of the crate tree uses it too.
 
+A `url` target needs `crate--embark-target-url-at-point` for the same
+reason.  `embark-target-url-at-point` reads the URL through
+`thing-at-point`, which answers from the `crate-url` property, but it
+takes the bounds from `thing-at-point-bounds-of-url-at-point`, which
+parses the buffer text.  A short label therefore gives a span that
+starts inside the label, and a label that the URL regexp cannot parse
+gives an empty span.  The finder reads the property for the value and
+for the bounds, and `with-eval-after-load 'embark` adds it to
+`embark-target-finders` beside the file finder.
+
 `crate-tree-mode` adds `crate-tree--thing-at-point-file` for
 `filename`.  The Location cell shows the base name and the line alone,
 so a reader that parses the text cannot reach the file.  The cell
@@ -834,7 +844,7 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 | evil | soft | optional key layer in `evil-crate.el` |
 | tired | soft | `tired-shorten-path` applies the reader's `tired-shorthand-rules` to a printed path; `crate--display-path` guards on `fboundp` |
 | buffer-url | soft | `buffer-url-pretty-print` applies the reader's `buffer-url-shorten-alist` to a printed URL; `crate--display-url` guards on `fboundp` |
-| embark | soft | export, candidate actions, and a file target finder for a shortened Location cell |
+| embark | soft | export, candidate actions, and file and URL target finders for a shortened label |
 | nix (external) | soft | on-demand rustdoc JSON when `crate-doc-enable` is t |
 
 ## TODO

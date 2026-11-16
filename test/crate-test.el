@@ -1984,6 +1984,28 @@ dependency name and the docs.rs fallback alike."
             (should (eq (car target) 'file))
             (should (equal (cadr target) "/nix/store/abc-source"))))))))
 
+(ert-deftest crate-embark-target-url-finder ()
+  "The URL finder covers the whole short label, from any point in it."
+  (cl-letf (((symbol-function 'buffer-url-pretty-print)
+             (lambda (_url) "gh:owner/repo")))
+    (with-temp-buffer
+      (crate-mode)
+      (let ((inhibit-read-only t))
+        (insert (crate--display-url "https://github.com/owner/repo")))
+      (let ((bounds (cons (point-min) (point-max))))
+        (dotimes (offset (- (point-max) (point-min)))
+          (goto-char (+ (point-min) offset))
+          (let ((target (crate--embark-target-url-at-point)))
+            (should (eq (car target) 'url))
+            (should (equal (cadr target)
+                           "https://github.com/owner/repo"))
+            (should (equal (cddr target) bounds)))))))
+  (with-temp-buffer
+    (crate-mode)
+    (let ((inhibit-read-only t)) (insert "plain text"))
+    (goto-char (point-min))
+    (should-not (crate--embark-target-url-at-point))))
+
 (ert-deftest crate-mode-renders-dependency-buttons ()
   "Dependency rows render with name, req, kind, and optional marker."
   (let ((crate--data-cache (make-hash-table :test 'equal)))
