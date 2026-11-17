@@ -221,8 +221,13 @@ build stores its reason in `crate-tree--reason`, keyed like this
 cache, and copies it into the buffer-local `crate-tree--status`, so
 `crate-tree--status-message` replaces the bare "No rustdoc JSON"
 line with the fix.  A failed build keeps its output buffer as
-`*crate-tree-build*` and shows the last line of `cargo doc` there.
-A `running` status reads "build in progress".
+`*crate-tree-build*` and names the first line of `cargo doc` that
+starts with `error`, not the last line, because a failing build ends
+on `warning: build failed, waiting for other jobs to finish...` and
+that warning names no cause.  The reason also names the log buffer,
+so a reader reaches the lines above the cause.  A build that exits
+without writing a document names the path where the document was
+expected.  A `running` status reads "build in progress".
 
 A database crate draws its rows from the Nix build, so it reads the
 reason from `crate-doc--status-of` through `crate-tree--apply-doc`,

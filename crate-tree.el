@@ -781,6 +781,14 @@ the build, and BUFFER names the reason in place of the rows."
   (crate-tree--set-status buffer reason)
   nil)
 
+(defconst crate-tree--build-log-buffer "*crate-tree-build*"
+  "Name of the buffer that keeps the output of a failed `cargo doc'.")
+
+(defun crate-tree--clean-line (text)
+  "Return TEXT without terminal escape sequences and outside space."
+  (declare (pure t) (side-effect-free t))
+  (string-trim (replace-regexp-in-string "\033\\[[0-9;]*[A-Za-z]" "" text)))
+
 (defun crate-tree--failure-line (out)
   "Return the last line of OUT, the buffer of a `cargo doc' run."
   (with-current-buffer out
@@ -788,24 +796,57 @@ the build, and BUFFER names the reason in place of the rows."
     (let (line)
       (while (and (not line) (not (bobp)))
         (forward-line -1)
-        (let ((text (string-trim (buffer-substring (point) (line-end-position)))))
+        (let ((text (crate-tree--clean-line
+                     (buffer-substring (point) (line-end-position)))))
           (when (not (string-empty-p text))
             (setq line text))))
       line)))
+
+(defun crate-tree--error-line (out)
+  "Return the first line of OUT that names a failure.
+OUT holds the output of a `cargo doc' run.  A failed build writes its
+cause above a trailing warning about the jobs that still run, so the
+last line of OUT names no cause."
+  (with-current-buffer out
+    (save-excursion
+      (goto-char (point-min))
+      (let (line)
+        (while (and (not line) (not (eobp)))
+          (let ((text (crate-tree--clean-line
+                       (buffer-substring (point) (line-end-position)))))
+            (when (string-match-p "\\`\\(?:error\\|thread '.*' panicked\\)"
+                                  text)
+              (setq line text)))
+          (forward-line 1))
+        line))))
+
+(defun crate-tree--failure-reason (out log)
+  "Return the reason line of a build whose output sits in OUT.
+LOG names the buffer that keeps OUT, so a reader reaches the lines
+that OUT holds above the reported cause."
+  (let ((cause (or (crate-tree--error-line out)
+                   (crate-tree--failure-line out))))
+    (if cause
+        (format "`cargo doc' failed: %s (log in buffer `%s')" cause log)
+      (format "`cargo doc' exited with an error (log in buffer `%s')" log))))
 
 (defun crate-tree--finish-build (process out buffer key manifest json-file)
   "Record the result of the build that PROCESS ran.
 OUT holds its output, BUFFER the tree, and KEY, MANIFEST and
 JSON-FILE say where the cache entry, the build and the JSON live.
-A failed build keeps OUT as `*crate-tree-build*' and names its last
-line in BUFFER, in place of the rows."
+A failed build keeps OUT as `crate-tree--build-log-buffer' and names
+its cause in BUFFER, in place of the rows."
   (let* ((exited (eq 0 (process-exit-status process)))
          (json (and exited (crate-tree--read-json json-file)))
+         (log (and (null json) (buffer-live-p out)
+                   (with-current-buffer out
+                     (rename-buffer crate-tree--build-log-buffer t)
+                     (buffer-name out))))
          (reason (unless json
                    (if exited
-                       "`cargo doc' wrote no rustdoc JSON"
-                     (or (crate-tree--failure-line out)
-                         "`cargo doc' exited with an error")))))
+                       (format "`cargo doc' wrote no rustdoc JSON at %s"
+                               (abbreviate-file-name json-file))
+                     (crate-tree--failure-reason out log)))))
     (remhash manifest crate-tree--in-flight)
     (puthash key (or json :failed) crate-tree--json-cache)
     (if reason
@@ -818,11 +859,8 @@ line in BUFFER, in place of the rows."
           (crate-tree--apply-json (or json :failed))
           (when reason
             (message "crate-tree: %s" reason)))))
-    (when (buffer-live-p out)
-      (if reason
-          (with-current-buffer out
-            (rename-buffer "*crate-tree-build*" t))
-        (kill-buffer out)))))
+    (when (and (buffer-live-p out) (null log))
+      (kill-buffer out))))
 
 (defun crate-tree--start-local-build (directory buffer)
   "Document the crate in DIRECTORY, then reprint BUFFER.

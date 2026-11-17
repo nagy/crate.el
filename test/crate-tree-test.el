@@ -877,6 +877,95 @@ library."
         (should-not (crate-tree--json dir))
         (should (equal crate-tree--status "a reason"))))))
 
+(ert-deftest crate-tree-error-line-skips-the-trailing-warning ()
+  "A failed build names its cause, not the warning that follows it."
+  (with-temp-buffer
+    (insert "   Compiling foo v0.1.0\n"
+            "error[E0308]: mismatched types\n"
+            "  --> src/lib.rs:1:26\n"
+            "warning: build failed, waiting for other jobs to finish...\n")
+    (should (equal (crate-tree--error-line (current-buffer))
+                   "error[E0308]: mismatched types"))))
+
+(ert-deftest crate-tree-error-line-without-an-error ()
+  "A build without an error line answers nil, and the last line stays."
+  (with-temp-buffer
+    (insert "    Finished `dev' profile\n\n")
+    (should-not (crate-tree--error-line (current-buffer)))
+    (should (equal (crate-tree--failure-line (current-buffer))
+                   "Finished `dev' profile"))))
+
+(ert-deftest crate-tree-failure-reason-strips-escapes-and-names-the-log ()
+  "The reason names the cause and the buffer that keeps the whole log."
+  (with-temp-buffer
+    (insert "\033[1m\033[31merror\033[0m\033[1m:\033[0m unresolved link to `Nope'\n"
+            "warning: build failed, waiting for other jobs to finish...\n")
+    (should (equal (crate-tree--failure-reason (current-buffer) "*crate-tree-build*")
+                   (concat "`cargo doc' failed: error: unresolved link to `Nope'"
+                           " (log in buffer `*crate-tree-build*')")))))
+
+(ert-deftest crate-tree-finish-build-keeps-the-log-of-a-failure ()
+  "A failed build names its cause in the table and keeps its output."
+  (crate-test--with-local-crate dir
+    (let* ((key (crate-tree--json-cache-key dir))
+           (manifest (crate-local--manifest dir))
+           (json-file (expand-file-name "doc/my_crate.json" dir))
+           (out (generate-new-buffer " *crate-tree-test-build*"))
+           (process (make-process :name "crate-tree-test-build"
+                                  :command '("false")
+                                  :noquery t))
+           (crate-tree--json-cache (make-hash-table :test #'equal))
+           (crate-tree--reason (make-hash-table :test #'equal))
+           (crate-tree--in-flight (make-hash-table :test #'equal)))
+      (unwind-protect
+          (with-temp-buffer
+            (crate-tree-mode)
+            (with-current-buffer out
+              (insert "error: could not document `my_crate'\n"
+                      "warning: build failed, waiting for other jobs to finish...\n"))
+            (while (eq (process-status process) 'run)
+              (accept-process-output process 0.1))
+            (crate-tree--finish-build process out (current-buffer)
+                                      key manifest json-file)
+            (should (eq (gethash key crate-tree--json-cache) :failed))
+            (should (string-match-p "could not document"
+                                    (gethash key crate-tree--reason)))
+            (should (string-match-p "\\*crate-tree-build\\*" crate-tree--status))
+            (should (get-buffer "*crate-tree-build*"))
+            (should-not (process-live-p process)))
+        (when (get-buffer "*crate-tree-build*")
+          (kill-buffer "*crate-tree-build*"))
+        (when (buffer-live-p out)
+          (kill-buffer out))))))
+
+(ert-deftest crate-tree-finish-build-names-a-missing-document ()
+  "A build that exits without JSON names the path it expected."
+  (crate-test--with-local-crate dir
+    (let* ((key (crate-tree--json-cache-key dir))
+           (manifest (crate-local--manifest dir))
+           (json-file (expand-file-name "doc/my_crate.json" dir))
+           (out (generate-new-buffer " *crate-tree-test-build*"))
+           (process (make-process :name "crate-tree-test-build-ok"
+                                  :command '("true")
+                                  :noquery t))
+           (crate-tree--json-cache (make-hash-table :test #'equal))
+           (crate-tree--reason (make-hash-table :test #'equal))
+           (crate-tree--in-flight (make-hash-table :test #'equal)))
+      (unwind-protect
+          (with-temp-buffer
+            (crate-tree-mode)
+            (while (eq (process-status process) 'run)
+              (accept-process-output process 0.1))
+            (crate-tree--finish-build process out (current-buffer)
+                                      key manifest json-file)
+            (should (string-match-p "wrote no rustdoc JSON"
+                                    (gethash key crate-tree--reason)))
+            (should (string-match-p "my_crate.json" crate-tree--status)))
+        (when (get-buffer "*crate-tree-build*")
+          (kill-buffer "*crate-tree-build*"))
+        (when (buffer-live-p out)
+          (kill-buffer out))))))
+
 (ert-deftest crate-tree-read-json ()
   "The reader parses a rustdoc document and survives a broken file."
   (let ((file (make-temp-file "crate-tree-json" nil ".json")))
