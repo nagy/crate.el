@@ -697,8 +697,21 @@ so a second call only displays it."
 
 ;; `cargo doc' type-checks the crate, so the build costs about the same
 ;; as `cargo check'.  It needs the dependencies of the crate, so the
-;; command runs online and outside Nix: a local development crate
-;; usually has its dependencies in the cargo cache already.
+;; command runs outside Nix and resists the network: a local
+;; development crate usually holds its dependencies in the cargo cache
+;; already, so `--frozen' never needs a download.
+
+(defcustom crate-tree-target-directory 'cache
+  "Where a local rustdoc build writes its output.
+`cache' names a directory below the user cache that a hash of the
+manifest, the lockfile and the rustc version keys, so a build leaves
+no `target' directory in the crate and survives an Emacs restart.
+nil keeps the `target' directory that cargo picks.
+A string names one target directory for every crate."
+  :type '(choice (const :tag "Cache directory" cache)
+                 (const :tag "Cargo default" nil)
+                 (directory :tag "Directory"))
+  :group 'crate)
 
 (defvar crate-tree--json-cache (make-hash-table :test #'equal)
   "Parsed rustdoc JSON keyed by (tree MANIFEST).
@@ -722,6 +735,83 @@ a string the reason that the crate has no rustdoc JSON.")
   "Return the cache key of the crate in DIRECTORY."
   (list 'tree (crate-local--manifest directory)))
 
+(defun crate-tree--cache-root ()
+  "Return the root of the rustdoc build cache."
+  (declare (side-effect-free t))
+  (expand-file-name "crate.el/tree"
+                    (let ((xdg (getenv "XDG_CACHE_HOME")))
+                      (if (and xdg (not (string-empty-p xdg)))
+                          xdg
+                        "~/.cache"))))
+
+(defvar crate-tree--rustc-versions (make-hash-table :test #'equal)
+  "Rustc version strings keyed by executable path.")
+
+(defun crate-tree--rustc-version ()
+  "Return the version of `crate-rustc-program', or nil."
+  (when-let* ((program crate-rustc-program)
+              (rustc (executable-find program)))
+    (or (gethash rustc crate-tree--rustc-versions)
+        (puthash rustc
+                 (string-trim
+                  (or (with-output-to-string
+                        (ignore-errors
+                          (call-process rustc nil standard-output nil
+                                        "--version")))
+                      ""))
+                 crate-tree--rustc-versions))))
+
+(defun crate-tree--lock-file (directory)
+  "Return the lockfile path of the crate in DIRECTORY."
+  (declare (pure t) (side-effect-free t))
+  (expand-file-name "Cargo.lock"
+                    (file-name-as-directory (expand-file-name directory))))
+
+(defun crate-tree--file-contents (file)
+  "Return the contents of FILE, or the empty string."
+  (if (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (buffer-string))
+    ""))
+
+(defun crate-tree--build-key (directory)
+  "Return the directory name that keys the build of the crate in DIRECTORY.
+The manifest, the lockfile and the rustc version take part, so a
+changed dependency or a new compiler selects a fresh directory."
+  (secure-hash
+   'sha256
+   (mapconcat #'identity
+              (list (crate-local--manifest directory)
+                    (crate-tree--file-contents
+                     (crate-local--manifest directory))
+                    (crate-tree--file-contents
+                     (crate-tree--lock-file directory))
+                    (or (crate-tree--rustc-version) ""))
+              "\0")))
+
+(defun crate-tree--target-directory (directory)
+  "Return the target directory of the build of the crate in DIRECTORY.
+nil means that the build keeps the `target' directory that cargo
+picks.  See `crate-tree-target-directory'."
+  (pcase crate-tree-target-directory
+    ('cache (expand-file-name (crate-tree--build-key directory)
+                              (crate-tree--cache-root)))
+    ((pred null) nil)
+    ((pred stringp) (expand-file-name crate-tree-target-directory))))
+
+(defun crate-tree--doc-arguments (directory)
+  "Return the `cargo doc' arguments of the crate in DIRECTORY.
+A lockfile that exists gives `--frozen', which implies `--offline'
+and `--locked', so the build reaches no network and rewrites no
+lockfile.  A crate without a lockfile gets `--offline' alone,
+because `--frozen' refuses to write one."
+  (declare (side-effect-free t))
+  (append (list "doc" "--lib" "--no-deps" "--document-private-items")
+          (list (if (file-readable-p (crate-tree--lock-file directory))
+                    "--frozen"
+                  "--offline"))))
+
 (defun crate-tree--lib-target (package)
   "Return the library target of the `cargo metadata' PACKAGE.
 A package without a library target answers nil, and the tree mode
@@ -734,11 +824,14 @@ builds nothing for it."
                           (crate-tree--ids (gethash "kind" target))))
               (append targets nil))))
 
-(defun crate-tree--json-file (metadata manifest)
-  "Return the rustdoc JSON path that METADATA names for MANIFEST."
+(defun crate-tree--json-file (metadata manifest &optional target-directory)
+  "Return the rustdoc JSON path that METADATA names for MANIFEST.
+TARGET-DIRECTORY overrides the `target_directory' that METADATA
+answers, so a build into the cache directory finds its own output."
   (when-let* ((package (crate-local--package metadata manifest))
               (target (crate-tree--lib-target package))
-              (directory (gethash "target_directory" metadata))
+              (directory (or target-directory
+                             (gethash "target_directory" metadata)))
               (name (gethash "name" target)))
     (expand-file-name (concat name ".json")
                       (expand-file-name "doc" directory))))
@@ -753,12 +846,16 @@ builds nothing for it."
           (json-parse-buffer)
         (error nil)))))
 
-(defun crate-tree--build-environment ()
-  "Return the environment list of a rustdoc build.
+(defun crate-tree--build-environment (target-directory)
+  "Return the environment list of a rustdoc build into TARGET-DIRECTORY.
 Stable rustc writes JSON behind `-Z unstable-options', and
-RUSTC_BOOTSTRAP lifts that gate."
+RUSTC_BOOTSTRAP lifts that gate.  A nil TARGET-DIRECTORY keeps the
+`target' directory that cargo picks."
   (append (list "RUSTC_BOOTSTRAP=1"
-                "RUSTDOCFLAGS=-Zunstable-options --output-format json")
+                "RUSTDOCFLAGS=-Zunstable-options --output-format json"
+                "CARGO_NET_OFFLINE=true")
+          (when target-directory
+            (list (concat "CARGO_TARGET_DIR=" target-directory)))
           (when-let* ((program crate-rustc-program)
                       (rustc (executable-find program)))
             (list (concat "RUSTC=" rustc)))))
@@ -876,7 +973,9 @@ its reason, so the table can name the fix."
          (program (and crate-cargo-program
                        (executable-find crate-cargo-program)))
          (metadata (and program (crate-local--metadata directory)))
-         (json-file (and metadata (crate-tree--json-file metadata manifest))))
+         (target (and metadata (crate-tree--target-directory directory)))
+         (json-file (and metadata
+                         (crate-tree--json-file metadata manifest target))))
     (cond
      ((gethash manifest crate-tree--in-flight)
       (crate-tree--set-status buffer 'running)
@@ -892,7 +991,8 @@ its reason, so the table can name the fix."
       (let ((out (generate-new-buffer " *crate-tree-build*"))
             (doc (file-name-nondirectory
                   (directory-file-name (file-name-directory manifest))))
-            (environment (crate-tree--build-environment)))
+            (arguments (crate-tree--doc-arguments directory))
+            (environment (crate-tree--build-environment target)))
         (condition-case nil
             (progn
               (let ((process-environment (append environment
@@ -904,8 +1004,7 @@ its reason, so the table can name the fix."
                 (make-process
                  :name (format "crate-tree-build-%s" doc)
                  :buffer out
-                 :command (list program "doc" "--lib" "--no-deps"
-                                "--document-private-items")
+                 :command (cons program arguments)
                  :noquery t
                  :sentinel
                  (lambda (process _event)

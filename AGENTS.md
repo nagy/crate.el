@@ -52,7 +52,14 @@ Two producers fill two caches. For a database crate, `crate-doc--start-build`
 runs `nix-build` on `nix/crate-doc.nix` and stores the document in
 `crate-doc--cache`. For a local crate, `crate-tree--start-local-build`
 runs `cargo doc` with JSON output and stores the document under the
-manifest. Both `crate-doc--status` and `crate-tree--reason` hold
+manifest. A local build resists the network and the crate tree:
+`crate-tree--doc-arguments` passes `--frozen` when a `Cargo.lock`
+exists, `--offline` otherwise, and `CARGO_TARGET_DIR` points at
+`crate-tree-target-directory`, which by default names a cache
+directory keyed by the manifest, the lockfile and the rustc version.
+A build thus writes no `target` directory into the crate and no
+lockfile change, and a second Emacs session reuses its output. Both
+`crate-doc--status` and `crate-tree--reason` hold
 `running` or the reason that a crate has no document, and every entry
 point shows that reason in place of the rows.
 

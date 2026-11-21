@@ -787,6 +787,43 @@ library."
     (puthash "kind" ["bin"] target)
     (should-not (crate-tree--json-file metadata manifest))))
 
+(ert-deftest crate-tree-json-file-target-directory ()
+  "A target directory argument wins over the metadata answer."
+  (let* ((manifest (expand-file-name "Cargo.toml" "/tmp/mycrate"))
+         (metadata (crate-tree-test--metadata manifest "/tmp/target")))
+    (should (equal (crate-tree--json-file metadata manifest "/tmp/cache")
+                   "/tmp/cache/doc/my_crate.json"))))
+
+(ert-deftest crate-tree-doc-arguments-frozen ()
+  "A crate with a lockfile builds without the network."
+  (crate-test--with-local-crate dir
+    (with-temp-file (expand-file-name "Cargo.lock" dir))
+    (should (member "--frozen" (crate-tree--doc-arguments dir)))
+    (should-not (member "--offline" (crate-tree--doc-arguments dir)))))
+
+(ert-deftest crate-tree-doc-arguments-no-lockfile ()
+  "A crate without a lockfile keeps the offline flag alone."
+  (crate-test--with-local-crate dir
+    (should (member "--offline" (crate-tree--doc-arguments dir)))
+    (should-not (member "--frozen" (crate-tree--doc-arguments dir)))))
+
+(ert-deftest crate-tree-target-directory-cache ()
+  "The cache target directory keys on the manifest and the lockfile."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree-target-directory 'cache))
+      (let ((first (crate-tree--target-directory dir)))
+        (should (file-name-absolute-p first))
+        (should (equal first (crate-tree--target-directory dir)))
+        (with-temp-file (expand-file-name "Cargo.lock" dir)
+          (insert "# changed\n"))
+        (should-not (equal first (crate-tree--target-directory dir)))))))
+
+(ert-deftest crate-tree-target-directory-default ()
+  "A nil option keeps the target directory that cargo picks."
+  (crate-test--with-local-crate dir
+    (let ((crate-tree-target-directory nil))
+      (should-not (crate-tree--target-directory dir)))))
+
 (ert-deftest crate-tree-json-cached ()
   "A cached document answers without a build."
   (crate-test--with-local-crate dir
