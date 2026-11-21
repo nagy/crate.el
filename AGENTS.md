@@ -1,6 +1,6 @@
 # AGENTS.md — crate.el
 
-## Overview
+## Purpose
 
 Emacs package for browsing Rust crates from a local crates.io SQLite
 database, plus a detail view of a local crate directory read through
@@ -8,7 +8,33 @@ database, plus a detail view of a local crate directory read through
 optional evil layer.  A browse-url handler redirects crates.io URLs to
 `find-crate`.
 
-## Build & test
+## Layout
+
+- `crate.el` — main package
+- `crate-tree.el` — crate item structure from rustdoc JSON
+- `ol-crate.el` — Org link support
+- `evil-crate.el` — optional evil layer (soft dependency)
+- `nix/crate-doc.nix` — rustdoc JSON build
+- `nix/harness-doc.nix` — rustdoc JSON of the test fixture crate
+- `nix/lint.nix` — checkdoc plus package-lint gate
+- `nix/default.nix` — package expression (`melpaBuild`)
+- `nix/test-crates-db.nix` — fixture SQLite database
+- `nix/emacs-screenshot.nix` — screenshot and git branch
+- `flake.nix`, `flake.lock` — flake outputs and pinned inputs
+- `test/crate-test.el`, `test/crate-test-helper.el`,
+  `test/crate-tree-test.el`, `test/evil-crate-test.el` — ERT suites and
+  fixtures
+- `test/fixtures/harness/` — dependency-free crate for rustdoc parsing
+  tests, plus `test/fixtures/harness.structure.txt`, its cargo-modules
+  output
+- `README.org`, `CONTEXT.md`, `docs/adr/`, `LICENSE`
+
+`crate.el` is organized by `;;;` headings: cache, local crates, doc
+build, helpers, faces, buttons, point keeping, sections, major mode,
+completion, marginalia, commands, bookmarks, integrations, browse mode,
+dependency copy, Cargo.toml completion, Embark.
+
+## Build and test
 
 ```sh
 nix build                       # build
@@ -64,31 +90,7 @@ same string into the `;; Version:` header, writes the store paths of
 `locate-library` finds no `nix/` directory in the package, and a
 missing path once read as "No rustdoc JSON yet" with no build at all.
 
-## Files
-
-- `crate.el` — main package
-- `crate-tree.el` — crate item structure from rustdoc JSON
-- `ol-crate.el` — Org link support
-- `evil-crate.el` — optional evil layer (soft dependency)
-- `nix/crate-doc.nix` — rustdoc JSON build
-- `nix/harness-doc.nix` — rustdoc JSON of the test fixture crate
-- `nix/lint.nix` — checkdoc plus package-lint gate
-- `nix/default.nix` — package expression (`melpaBuild`)
-- `nix/test-crates-db.nix` — fixture SQLite database
-- `nix/emacs-screenshot.nix` — screenshot and git branch
-- `flake.nix`, `flake.lock` — flake outputs and pinned inputs
-- `test/crate-test.el`, `test/crate-test-helper.el`,
-  `test/crate-tree-test.el`, `test/evil-crate-test.el` — ERT suites and
-  fixtures
-- `test/fixtures/harness/` — dependency-free crate for rustdoc parsing
-  tests, plus `test/fixtures/harness.structure.txt`, its cargo-modules
-  output
-- `README.org`, `CONTEXT.md`, `docs/adr/`, `LICENSE`
-
-`crate.el` is organized by `;;;` headings: cache, local crates, doc
-build, helpers, faces, buttons, point keeping, sections, major mode,
-completion, marginalia, commands, bookmarks, integrations, browse mode,
-dependency copy, Cargo.toml completion, Embark.
+## Architecture
 
 ### Rustdoc JSON pipeline
 
@@ -320,161 +322,6 @@ half-reading the document.  A struct field, a
 variant and a `use` item carry a span.  An impl item carries none and
 never becomes a row.
 
-## Conventions
-
-### Docstrings
-
-Keep one line when the name, arguments and body already say it.  Keep
-facts that the code does not show: measurements, formats, invariants,
-external quirks and Emacs API contracts.  checkdoc requires a docstring
-on every `defun`; `defcustom` and `defface` make it positional, so they
-need at least a one-line string.
-
-### Byte-compiler silencing
-
-Declare external vars and faces from optional deps with a value-less
-`(defvar <var>)`, never a value (the real default would be lost).
-Cross-file functions use `declare-function`.  Required deps get
-`(require 'package)`.
-
-### `cl-labels` for mode-local helpers
-
-A helper that only a major mode body calls belongs in a `cl-labels`
-closure.  A section inserter is the exception: it carries a `crate-`
-prefix, takes no arguments and lives at top level, because a user names
-it in `crate-detail-sections-hook`.
-
-### `permanent-local` for mode-surviving state
-
-`define-derived-mode` calls `kill-all-local-variables`.
-`crate-name`, `crate-data` and `crate-local-path` are set after
-`crate-mode`, so they need no `permanent-local`.  A variable set with
-`setq-local` before a mode call needs `(put 'var 'permanent-local t)`;
-the browse-mode filters do this.
-
-### Graceful load failures
-
-`crate--list` wraps the file load and the queries in `condition-case`,
-so a missing or corrupt database answers nil.  `find-crate` blames the
-configuration before the name, through `crate--database-readable-p`, so
-a missing DB never masquerades as a missing crate.  Close SQLite handles
-with `unwind-protect`, never `prog1`.
-
-In `lexical-binding: t`, plain `let` evaluates all init forms in the
-outer scope.  Use `let*` when one binding depends on a prior one.
-
-### `declare` for pure functions
-
-`(declare (pure t) (side-effect-free t))` when the result depends on the
-arguments only.  A function that reads a defcustom, a buffer-local or a
-face gets `side-effect-free` alone.  A function that writes a hash
-table, a file or a buffer gets neither.
-
-### `defconst` for shared strings
-
-A non-configurable string used in several places is a `defconst`.
-
-### Canonical crate names
-
-`crate--canonical-name` (downcase, hyphens to underscores) is the single
-lookup form.  `crate--list` and `crate--crate` key by it.  The entry's
-`"name"` holds the published name, and display, completion and URLs use
-it.  A canonical form is not a published name, so `crate--crate` asks
-for both spellings (`async-trait` and `async_trait`).  Two spellings
-suffice on a full dump of 358 423 names: no name mixes both separators
-and no two names share a canonical form.
-
-### Local crates go through `cargo metadata`
-
-`crate-visit-directory` reads a directory through
-`crate-local--metadata` (`cargo metadata --no-deps --offline`, using
-`crate-cargo-program`, where nil turns the command off).
-`crate-local--entry` maps the package onto the shape of a `crates` row,
-so every section inserter works on both sources.  `crate-local-path`
-tells the sources apart: `crate--dependencies` reads `crate-data` for a
-local crate, `crate--insert-repository` makes the crate directory the
-`default-directory`, and `crate-insert-modules` shows no section.
-
-A local record memoizes under `(list 'local MANIFEST)` with the same
-`:failed` sentinel, so `crate-refresh-cache` drops it.
-`crate--revert` forgets the entry first, so `g` picks up an edited
-manifest.  A local crate keeps its own buffer,
-`Crate: <name> (<path>)`, and its bookmark carries the directory.
-
-`cargo metadata` answers canonical paths, so `crate-local--truename`
-resolves the symlinks on both sides of a manifest comparison and on
-the base of a path dependency.  A directory that a reader reaches
-through a symlink then answers its own package.
-
-A virtual workspace root holds no package of its own, and
-`crate-local--package` answers nil for it, never a member.
-`crate-local--resolve-directory` then prompts for one member through
-`crate-local--choose-member`, and answers that member directory, so
-the buffer, its bookmark and the rustdoc build read a manifest that
-holds a package.  A directory that holds a package never prompts.
-
-A local dependency row has the database shape plus a `(KIND . TARGET)`
-source spec in its fifth slot.  A registry dependency carries no spec;
-a path or git dependency prints `{ path = "../foo" }` or
-`{ git = "URL" }` and is no button, because it has no crates.io page.
-
-### One crate record, not the whole table
-
-`crate--crate` reads one row through the `name` primary-key btree and
-memoizes it.  `crate--list` reads every row, which on a full dump makes
-358 423 hash tables: 1.8 s and +647 MiB.  So `find-crate`,
-`crate--annotate`, `crate-doc--json` and `crate-copy-dependency` use
-`crate--crate`; only a view over every crate uses `crate--list`, and it
-keeps the whole table.  Measured on the 422 MB dump, `find-crate` for
-serde went from 5.27 s to 0.09 s and from 1 022 MiB to 146 MiB.
-
-### Completion conventions
-
-`crate--collection` returns `(metadata (category . crate)
-(annotation-function . ...))` for the `metadata` action, so Marginalia
-and Embark can hook in.  Candidates come from per-keystroke SQL prefix
-queries in `crate--match-names`; no full name list materializes.  Escape
-LIKE wildcards, because `_` is a valid crate-name character.
-
-**`crate--match-names` turns on `case_sensitive_like`.**  `LIKE`
-compares case-insensitively by default, which leaves SQLite off the
-`name` btree: `EXPLAIN QUERY PLAN` answers `SCAN crates`, and one
-keystroke costs 50 ms.  All published names are lowercase, so the pragma
-plus a downcased prefix walks the btree in 0.03 ms.
-
-Every candidate costs a row fetch, so `crate-completion-limit` (default
-200) stops the query; nil fetches every match.
-
-### Memoization
-
-JSON data and crate structure results use `with-memoization` on
-`(gethash key hash-table)`.  Every cache key includes `crate-data-path`,
-so a path switch self-invalidates.
-
-`with-memoization` evaluates its place with `or`, so a nil body
-recomputes.  Use a `:failed` sentinel where nil is a valid cached
-outcome.  A cached list of names must not be nil: `crate--dependents-data`
-stores `(NAMES . TRUNCATED)`, and `(nil . nil)` survives the `or`.
-
-The doc-build cache reads the hash table directly, because that path is
-asynchronous.
-
-### Avoid `let-alist` on hash tables
-
-`let-alist` expands to `(cdr (assq ...))`, so it works on alists only.
-`json-parse-buffer` returns hash tables.  Use `gethash`.
-
-### Faces, display faces, and font-lock keywords
-
-Faces inherit from `package.el` or standard faces where available, and
-fall back left-to-right over undefined faces.  A field label keeps its
-colon and takes `crate-field-label`; a section heading carries no colon
-and takes `magit-section-heading`; a module name takes `default`.
-
-**Every face is a `crate-font-lock-keywords` rule, never a `propertize`
-call.**  `crate-mode` calls `font-lock-ensure`, which unfontifies the
-buffer first and removes a `face` property that no keyword matches.
-
 ### Links in a detail buffer
 
 `crate-mode` enables `goto-address-mode` through `crate-goto-address`
@@ -641,13 +488,6 @@ defvar, and `with-eval-after-load 'embark` adds it to that hook.
 `add-hook` prepends, so the finder runs before the builtin ones, and it
 answers nil in every buffer without the property.
 
-### One text button type for links
-
-`crate-link` carries the `crate-url` face, the `mouse-face`, the
-`follow-link` rule and a default `help-echo`.  A renderer writes
-`:type 'crate-link` and only the properties that differ.  A URL button
-falls back to `crate--button-url`.
-
 ### Browse table reload
 
 `crate-browse--reload` rebuilds `tabulated-list-entries` from the
@@ -717,6 +557,183 @@ Org link types live in `ol-crate.el`, loaded through
 `(with-eval-after-load 'org (require 'ol-crate))`.  Cross-file
 references use `declare-function` and `defvar`.
 
+
+## Rules
+
+### Byte-compiler silencing
+
+Declare external vars and faces from optional deps with a value-less
+`(defvar <var>)`, never a value (the real default would be lost).
+Cross-file functions use `declare-function`.  Required deps get
+`(require 'package)`.
+
+### Graceful load failures
+
+`crate--list` wraps the file load and the queries in `condition-case`,
+so a missing or corrupt database answers nil.  `find-crate` blames the
+configuration before the name, through `crate--database-readable-p`, so
+a missing DB never masquerades as a missing crate.  Close SQLite handles
+with `unwind-protect`, never `prog1`.
+
+In `lexical-binding: t`, plain `let` evaluates all init forms in the
+outer scope.  Use `let*` when one binding depends on a prior one.
+
+### `declare` for pure functions
+
+`(declare (pure t) (side-effect-free t))` when the result depends on the
+arguments only.  A function that reads a defcustom, a buffer-local or a
+face gets `side-effect-free` alone.  A function that writes a hash
+table, a file or a buffer gets neither.
+
+### `permanent-local` for mode-surviving state
+
+`define-derived-mode` calls `kill-all-local-variables`.
+`crate-name`, `crate-data` and `crate-local-path` are set after
+`crate-mode`, so they need no `permanent-local`.  A variable set with
+`setq-local` before a mode call needs `(put 'var 'permanent-local t)`;
+the browse-mode filters do this.
+
+### Canonical crate names
+
+`crate--canonical-name` (downcase, hyphens to underscores) is the single
+lookup form.  `crate--list` and `crate--crate` key by it.  The entry's
+`"name"` holds the published name, and display, completion and URLs use
+it.  A canonical form is not a published name, so `crate--crate` asks
+for both spellings (`async-trait` and `async_trait`).  Two spellings
+suffice on a full dump of 358 423 names: no name mixes both separators
+and no two names share a canonical form.
+
+### Local crates go through `cargo metadata`
+
+`crate-visit-directory` reads a directory through
+`crate-local--metadata` (`cargo metadata --no-deps --offline`, using
+`crate-cargo-program`, where nil turns the command off).
+`crate-local--entry` maps the package onto the shape of a `crates` row,
+so every section inserter works on both sources.  `crate-local-path`
+tells the sources apart: `crate--dependencies` reads `crate-data` for a
+local crate, `crate--insert-repository` makes the crate directory the
+`default-directory`, and `crate-insert-modules` shows no section.
+
+A local record memoizes under `(list 'local MANIFEST)` with the same
+`:failed` sentinel, so `crate-refresh-cache` drops it.
+`crate--revert` forgets the entry first, so `g` picks up an edited
+manifest.  A local crate keeps its own buffer,
+`Crate: <name> (<path>)`, and its bookmark carries the directory.
+
+`cargo metadata` answers canonical paths, so `crate-local--truename`
+resolves the symlinks on both sides of a manifest comparison and on
+the base of a path dependency.  A directory that a reader reaches
+through a symlink then answers its own package.
+
+A virtual workspace root holds no package of its own, and
+`crate-local--package` answers nil for it, never a member.
+`crate-local--resolve-directory` then prompts for one member through
+`crate-local--choose-member`, and answers that member directory, so
+the buffer, its bookmark and the rustdoc build read a manifest that
+holds a package.  A directory that holds a package never prompts.
+
+A local dependency row has the database shape plus a `(KIND . TARGET)`
+source spec in its fifth slot.  A registry dependency carries no spec;
+a path or git dependency prints `{ path = "../foo" }` or
+`{ git = "URL" }` and is no button, because it has no crates.io page.
+
+### One crate record, not the whole table
+
+`crate--crate` reads one row through the `name` primary-key btree and
+memoizes it.  `crate--list` reads every row, which on a full dump makes
+358 423 hash tables: 1.8 s and +647 MiB.  So `find-crate`,
+`crate--annotate`, `crate-doc--json` and `crate-copy-dependency` use
+`crate--crate`; only a view over every crate uses `crate--list`, and it
+keeps the whole table.  Measured on the 422 MB dump, `find-crate` for
+serde went from 5.27 s to 0.09 s and from 1 022 MiB to 146 MiB.
+
+### Memoization
+
+JSON data and crate structure results use `with-memoization` on
+`(gethash key hash-table)`.  Every cache key includes `crate-data-path`,
+so a path switch self-invalidates.
+
+`with-memoization` evaluates its place with `or`, so a nil body
+recomputes.  Use a `:failed` sentinel where nil is a valid cached
+outcome.  A cached list of names must not be nil: `crate--dependents-data`
+stores `(NAMES . TRUNCATED)`, and `(nil . nil)` survives the `or`.
+
+The doc-build cache reads the hash table directly, because that path is
+asynchronous.
+
+### One text button type for links
+
+`crate-link` carries the `crate-url` face, the `mouse-face`, the
+`follow-link` rule and a default `help-echo`.  A renderer writes
+`:type 'crate-link` and only the properties that differ.  A URL button
+falls back to `crate--button-url`.
+
+### Null guard in `when-let*` conditions
+
+JSON `null` becomes `:null`, and `string-replace` errors on it, so guard
+in the `when-let*` binding, not in the body:
+
+```elisp
+(or (when-let* ((it (gethash "key" data))
+                ((not (eq it :null))))
+      (string-replace "\n" "" it))
+    "")
+```
+
+## Conventions
+
+### Docstrings
+
+Keep one line when the name, arguments and body already say it.  Keep
+facts that the code does not show: measurements, formats, invariants,
+external quirks and Emacs API contracts.  checkdoc requires a docstring
+on every `defun`; `defcustom` and `defface` make it positional, so they
+need at least a one-line string.
+
+### `cl-labels` for mode-local helpers
+
+A helper that only a major mode body calls belongs in a `cl-labels`
+closure.  A section inserter is the exception: it carries a `crate-`
+prefix, takes no arguments and lives at top level, because a user names
+it in `crate-detail-sections-hook`.
+
+### `defconst` for shared strings
+
+A non-configurable string used in several places is a `defconst`.
+
+### Completion conventions
+
+`crate--collection` returns `(metadata (category . crate)
+(annotation-function . ...))` for the `metadata` action, so Marginalia
+and Embark can hook in.  Candidates come from per-keystroke SQL prefix
+queries in `crate--match-names`; no full name list materializes.  Escape
+LIKE wildcards, because `_` is a valid crate-name character.
+
+**`crate--match-names` turns on `case_sensitive_like`.**  `LIKE`
+compares case-insensitively by default, which leaves SQLite off the
+`name` btree: `EXPLAIN QUERY PLAN` answers `SCAN crates`, and one
+keystroke costs 50 ms.  All published names are lowercase, so the pragma
+plus a downcased prefix walks the btree in 0.03 ms.
+
+Every candidate costs a row fetch, so `crate-completion-limit` (default
+200) stops the query; nil fetches every match.
+
+### Avoid `let-alist` on hash tables
+
+`let-alist` expands to `(cdr (assq ...))`, so it works on alists only.
+`json-parse-buffer` returns hash tables.  Use `gethash`.
+
+### Faces, display faces, and font-lock keywords
+
+Faces inherit from `package.el` or standard faces where available, and
+fall back left-to-right over undefined faces.  A field label keeps its
+colon and takes `crate-field-label`; a section heading carries no colon
+and takes `magit-section-heading`; a module name takes `default`.
+
+**Every face is a `crate-font-lock-keywords` rule, never a `propertize`
+call.**  `crate-mode` calls `font-lock-ensure`, which unfontifies the
+buffer first and removes a `face` property that no keyword matches.
+
 ### Evil layer
 
 `evil-crate.el` is optional and never required by `crate.el`, which
@@ -753,19 +770,7 @@ state map holds must exist when `evil-crate.el` loads, and
 `crate-tree.el` may load later.  `crate-tree-set-depth` takes an
 argument, so `crate-evil--depth-command` builds one command per digit.
 
-### Null guard in `when-let*` conditions
-
-JSON `null` becomes `:null`, and `string-replace` errors on it, so guard
-in the `when-let*` binding, not in the body:
-
-```elisp
-(or (when-let* ((it (gethash "key" data))
-                ((not (eq it :null))))
-      (string-replace "\n" "" it))
-    "")
-```
-
-## Test conventions
+## Testing
 
 Every `ert-deftest` name carries the package prefix; `find-crate` joins
 the checked prefixes through `package-lint--sane-prefixes` in
@@ -852,6 +857,6 @@ the fixture rustdoc JSON path over `@testHarnessJson@` in
 | embark | soft | export, candidate actions, and file and URL target finders for a shortened label |
 | nix (external) | soft | on-demand rustdoc JSON when `crate-doc-enable` is t |
 
-## TODO
+## Open work
 
 None.
