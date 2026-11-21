@@ -23,7 +23,7 @@ and every key binding.
 
 ## Build and test
 
-- `nix flake check`: package byte-compile, both ERT suites, checkdoc, package-lint. Run before done.
+- `nix flake check`: the gate. Run before done.
 - `emacs --batch -L . -L test -l test/crate-tree-test.el -f ert-run-tests-batch-and-exit`: one suite in the dev shell. A test that needs a Nix fixture skips.
 - `nix build .#screenshot`: regenerate the README screenshot and its branch.
 - `nix fmt`: nixfmt over the Nix files. No Elisp formatter.
