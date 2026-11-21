@@ -1372,7 +1372,6 @@ stands for."
 (define-derived-mode crate-mode magit-section-mode "Crate"
   "Major mode for displaying Rust crate details.
 
-\\{crate-mode-map}
 Do not invoke this mode directly.  Use `find-crate' for a crates.io
 crate and `crate-visit-directory' for a local directory that holds
 a `Cargo.toml'.  `crate--render' inserts the buffer content after
@@ -1702,7 +1701,6 @@ every other record to `find-crate'."
 (define-derived-mode crate-browse-mode tabulated-list-mode "Crate-Browse"
   "Major mode for browsing Rust crates in a sortable table.
 
-\\{crate-browse-mode-map}
 The table shrinks its columns when the window is narrow."
   :interactive nil
   (setq tabulated-list-format
