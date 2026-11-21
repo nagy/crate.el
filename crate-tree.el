@@ -260,7 +260,11 @@ INNER holds its rustdoc object, with the kind key already removed."
   "Return the root `crate-tree-item' of the rustdoc document JSON.
 Answer nil when JSON is not a rustdoc document.  Signal a
 `user-error' when the document names a format version that this
-parser does not read."
+parser does not read.
+
+The walk builds every item path from the names of its parents,
+because rustdoc's `paths' table lists no associated item and so
+names no impl method and no trait member."
   (when (hash-table-p json)
     (let ((version (gethash "format_version" json)))
       (when (and version
