@@ -77,7 +77,7 @@ block, and each such file guards the names that it borrows.
 
 ## Rules
 
-- Byte-compiler warnings fail the build. Fix the warning, do not silence it.
+- Never silence a byte-compile warning. Fix the warning.
 - Run `nix flake check` before you report work as done.
 - `evil-crate.el` must not require `crate.el`. When Evil loads first, that require signals "Recursive `require'".
 - `crate-detail-sections-hook` is the one extension point for the section list. Do not add a second defcustom.
