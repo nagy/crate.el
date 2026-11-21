@@ -824,6 +824,99 @@ library."
     (let ((crate-tree-target-directory nil))
       (should-not (crate-tree--target-directory dir)))))
 
+(ert-deftest crate-tree-nix-path-prefers-the-defcustom ()
+  "The packaged build substitutes the store path of `tree-doc.nix'."
+  (let* ((file (make-temp-file "tree-doc-" nil ".nix"))
+         (crate-tree-nix-file file))
+    (unwind-protect
+        (progn
+          (should (equal (crate-tree--nix-path) file))
+          (setq crate-tree-nix-file (concat file ".absent"))
+          (should-not (equal (crate-tree--nix-path) crate-tree-nix-file)))
+      (delete-file file))))
+
+(ert-deftest crate-tree-workspace-root-from-metadata ()
+  "The metadata answer names the workspace root, not the member."
+  (crate-test--with-local-crate dir
+    (let ((metadata (make-hash-table :test #'equal)))
+      (puthash "workspace_root" "/tmp" metadata)
+      (should (equal (crate-tree--workspace-root metadata dir)
+                     (directory-file-name (file-truename "/tmp"))))
+      (should (equal (crate-tree--workspace-root (make-hash-table) dir)
+                     (directory-file-name (file-truename dir)))))))
+
+(ert-deftest crate-tree-nix-start-command ()
+  "The sandbox build passes the workspace root, the manifest and the lib."
+  (crate-test--with-local-crate dir
+    (let* ((process-environment (cons (concat "XDG_CACHE_HOME=" dir)
+                                      process-environment))
+           (manifest (expand-file-name "Cargo.toml" dir))
+           (metadata (crate-tree-test--metadata
+                      manifest (expand-file-name "target" dir)))
+           (nix-file (make-temp-file "tree-doc-" nil ".nix"))
+           (crate-tree--in-flight (make-hash-table :test #'equal))
+           (crate-tree--json-cache (make-hash-table :test #'equal))
+           (crate-tree--reason (make-hash-table :test #'equal))
+           (buffer (get-buffer-create " *crate-tree-test*"))
+           command)
+      (unwind-protect
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (program)
+                       (and (equal program "nix-build") "/bin/nix-build")))
+                    ((symbol-function 'crate-local--metadata)
+                     (lambda (_) metadata))
+                    ((symbol-function 'crate-tree--nix-path)
+                     (lambda () nix-file))
+                    ((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq command (plist-get args :command))
+                       (get-buffer-create " *crate-tree-process*"))))
+            (should (crate-tree--start-nix-build dir buffer))
+            (should (equal (seq-take command 2)
+                           (list "/bin/nix-build" nix-file)))
+            (should (equal (cadr (member "crateDir" command))
+                           (directory-file-name (file-truename dir))))
+            (should (equal (cadr (member "manifestPath" command))
+                           "Cargo.toml"))
+            (should (equal (cadr (member "libName" command)) "my_crate"))
+            (should (member "-o" command)))
+        (kill-buffer buffer)
+        (delete-file nix-file)))))
+
+(ert-deftest crate-tree-nix-failure-falls-back-to-cargo ()
+  "A sandbox build that fails retries through `cargo doc'."
+  (crate-test--with-local-crate dir
+    (let* ((manifest (expand-file-name "Cargo.toml" dir))
+           (out (generate-new-buffer " *crate-tree-nix-out*"))
+           (buffer (get-buffer-create " *crate-tree-test*"))
+           fallback)
+      (unwind-protect
+          (cl-letf (((symbol-function 'process-exit-status) (lambda (_) 1))
+                    ((symbol-function 'crate-tree--start-cargo-build)
+                     (lambda (&rest args) (setq fallback args) t)))
+            (crate-tree--finish-nix-build 'process out buffer dir manifest
+                                          "cargo" "/tmp/tree.json")
+            (should fallback)
+            (should (equal (buffer-name out) crate-tree--nix-log-buffer)))
+        (kill-buffer buffer)
+        (when (buffer-live-p out)
+          (kill-buffer out))))))
+
+(ert-deftest crate-tree-nix-store-path ()
+  "The store path that holds a tree.json answers, not a log line."
+  (let ((out (generate-new-buffer " *crate-tree-nix-out*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer out
+            (insert "building\n/nix/store/aaa-crate-tree-doc\n"))
+          (cl-letf (((symbol-function 'file-readable-p)
+                     (lambda (file)
+                       (equal file
+                              "/nix/store/aaa-crate-tree-doc/tree.json"))))
+            (should (equal (crate-tree--nix-store-path out)
+                           "/nix/store/aaa-crate-tree-doc"))))
+      (kill-buffer out))))
+
 (ert-deftest crate-tree-json-cached ()
   "A cached document answers without a build."
   (crate-test--with-local-crate dir

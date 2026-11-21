@@ -554,16 +554,22 @@ The answer is `running', a reason string, or nil when no build ran."
       "`nix-build' is not on `executable-find'"
     "`crate-doc.nix' is not next to `crate.el'"))
 
-(defun crate-doc--nix-path ()
-  "Return the path of the companion crate-doc.nix file, or nil."
-  (or (and crate-doc-nix-file
-           (file-readable-p crate-doc-nix-file)
-           crate-doc-nix-file)
+(defun crate-doc--companion-file (explicit names)
+  "Return the companion Nix file that EXPLICIT names, or the first of NAMES.
+NAMES holds paths relative to the directory of the installed
+`crate.el', because a package that `melpaBuild' installs carries no
+`nix' directory.  A nil EXPLICIT asks for a lookup."
+  (or (and explicit (file-readable-p explicit) explicit)
       (when-let* ((lib (locate-library "crate"))
                   (dir (file-name-directory lib)))
         (seq-find #'file-exists-p
-                  (list (expand-file-name "crate-doc.nix" dir)
-                        (expand-file-name "nix/crate-doc.nix" dir))))))
+                  (mapcar (lambda (name) (expand-file-name name dir))
+                          names)))))
+
+(defun crate-doc--nix-path ()
+  "Return the path of the companion crate-doc.nix file, or nil."
+  (crate-doc--companion-file crate-doc-nix-file
+                             '("crate-doc.nix" "nix/crate-doc.nix")))
 
 (defvar crate-doc--in-flight (make-hash-table :test #'equal)
   "In-flight async doc builds keyed by crate name.")

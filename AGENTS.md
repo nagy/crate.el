@@ -15,7 +15,7 @@ and every key binding.
 - `crate-tree.el`: rustdoc JSON parser, item table, local and database builds.
 - `ol-crate.el`: the `crate:` Org link type, loaded on demand.
 - `evil-crate.el`: optional Evil key layer.
-- `nix/`: package expression, lint gate, fixture database, both rustdoc builds, screenshot.
+- `nix/`: package expression, lint gate, fixture database, the three rustdoc builds (`crate-doc.nix`, `harness-doc.nix`, `tree-doc.nix`), screenshot.
 - `test/`: one suite per source unit, plus `crate-test-helper.el` for shared fixtures.
 - `test/fixtures/harness/`: dependency-free crate for the parser and the `cargo-modules` parity test.
 - `docs/adr/`: accepted decisions on the rustdoc pipeline, the section tree and local crates.
@@ -58,7 +58,21 @@ exists, `--offline` otherwise, and `CARGO_TARGET_DIR` points at
 `crate-tree-target-directory`, which by default names a cache
 directory keyed by the manifest, the lockfile and the rustc version.
 A build thus writes no `target` directory into the crate and no
-lockfile change, and a second Emacs session reuses its output. Both
+lockfile change, and a second Emacs session reuses its output.
+
+A local crate builds in the Nix sandbox first. `crate-tree--start-nix-build`
+runs `nix-build nix/tree-doc.nix --argstr crateDir WORKSPACE_ROOT
+--argstr manifestPath REL --argstr libName NAME -o G croot`.
+`tree-doc.nix` copies the workspace root through `builtins.path`, so a
+member resolves its path dependencies, and `cargoDeps` comes from
+`importCargoLock`, so a lockfile needs no vendor hash and the build
+touches no network. A crate without a lockfile builds through plain
+`stdenv` with `--offline`, which serves a dependency-free crate and
+fails for every other one. `crate-tree--build-key` keys the cache
+directory, so a changed source, lockfile or rustc selects a fresh
+build, and a failed sandbox build keeps its log in
+`*crate-tree-nix-build*` and retries through `cargo doc`, so a private
+registry or a system library still documents. Both
 `crate-doc--status` and `crate-tree--reason` hold
 `running` or the reason that a crate has no document, and every entry
 point shows that reason in place of the rows.

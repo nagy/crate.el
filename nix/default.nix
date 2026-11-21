@@ -64,6 +64,9 @@ melpaBuild {
     substituteInPlace crate.el \
       --replace-fail '(defcustom crate-rustc-program "rustc"' \
                      '(defcustom crate-rustc-program "${lib.getExe rustc}"'
+    substituteInPlace crate-tree.el \
+      --replace-fail '(defcustom crate-tree-nix-file nil' \
+                     '(defcustom crate-tree-nix-file "${./tree-doc.nix}"'
   '';
 
   checkPhase = ''

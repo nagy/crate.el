@@ -713,6 +713,24 @@ A string names one target directory for every crate."
                  (directory :tag "Directory"))
   :group 'crate)
 
+(defcustom crate-tree-nix-enable t
+  "When non-nil, build the rustdoc JSON of a local crate in the Nix sandbox.
+The sandbox blocks the network and writes nothing outside its build
+directory, and the Nix store caches a document whose source, lockfile
+and rustc version do not change.  A sandbox build that fails falls
+back to the local `cargo doc', so a crate with a private registry or a
+system library still documents.  `tree-doc.nix' carries the build."
+  :type 'boolean
+  :group 'crate)
+
+(defcustom crate-tree-nix-file nil
+  "Path of the companion `tree-doc.nix' file.
+nil means to look next to `crate.el' and in its `nix' directory.
+The Nix package writes the store path of the file here, because the
+installed package holds the Emacs Lisp files alone."
+  :type '(choice (const :tag "Look next to crate.el" nil) file)
+  :group 'crate)
+
 (defvar crate-tree--json-cache (make-hash-table :test #'equal)
   "Parsed rustdoc JSON keyed by (tree MANIFEST).
 A :failed sentinel caches a build that cannot run, so a reprint never
@@ -736,13 +754,18 @@ a string the reason that the crate has no rustdoc JSON.")
   (list 'tree (crate-local--manifest directory)))
 
 (defun crate-tree--cache-root ()
-  "Return the root of the rustdoc build cache."
+  "Return the root of the rustdoc build cache.
+A reader without `XDG_CACHE_HOME' or `HOME' gets a temporary
+directory, so a build still names a place to write."
   (declare (side-effect-free t))
-  (expand-file-name "crate.el/tree"
-                    (let ((xdg (getenv "XDG_CACHE_HOME")))
-                      (if (and xdg (not (string-empty-p xdg)))
-                          xdg
-                        "~/.cache"))))
+  (expand-file-name
+   "crate.el/tree"
+   (let ((xdg (getenv "XDG_CACHE_HOME"))
+         (home (getenv "HOME")))
+     (cond
+      ((and xdg (not (string-empty-p xdg))) xdg)
+      ((and home (not (string-empty-p home))) (expand-file-name ".cache" home))
+      (t (expand-file-name "crate-el-cache" temporary-file-directory))))))
 
 (defvar crate-tree--rustc-versions (make-hash-table :test #'equal)
   "Rustc version strings keyed by executable path.")
@@ -811,6 +834,50 @@ because `--frozen' refuses to write one."
           (list (if (file-readable-p (crate-tree--lock-file directory))
                     "--frozen"
                   "--offline"))))
+
+(defun crate-tree--nix-path ()
+  "Return the path of the companion tree-doc.nix file, or nil."
+  (crate-doc--companion-file crate-tree-nix-file
+                             '("tree-doc.nix" "nix/tree-doc.nix")))
+
+(defun crate-tree--workspace-root (metadata directory)
+  "Return the workspace root that METADATA names, or DIRECTORY.
+A sandbox build copies the workspace root, because a member resolves
+its path dependencies against siblings."
+  (let ((root (and metadata (gethash "workspace_root" metadata))))
+    (if (and (stringp root) (file-directory-p root))
+        (directory-file-name (crate-local--truename root))
+      (directory-file-name (crate-local--truename directory)))))
+
+(defun crate-tree--nix-root (key)
+  "Return the store link path that holds the document of KEY.
+The link keeps the document out of reach of the garbage collector, so
+a second Emacs session reuses it."
+  (expand-file-name (secure-hash 'sha256 (prin1-to-string key))
+                    (expand-file-name "roots" (crate-tree--cache-root))))
+
+(defun crate-tree--nix-store-path (out)
+  "Return the store path in OUT that holds a documented crate.
+`nix-build' prints that path, and `tree-doc.nix' installs the
+document as `tree.json' there, so a readable file finds the line and
+an unrelated line of the log names nothing."
+  (with-current-buffer out
+    (save-excursion
+      (goto-char (point-max))
+      (let (path)
+        (while (and (not path) (not (bobp)))
+          (forward-line -1)
+          (let ((line (string-trim
+                       (buffer-substring (point) (line-end-position)))))
+            (when (and (string-prefix-p "/nix/store/" line)
+                       (file-readable-p (expand-file-name "tree.json" line)))
+              (setq path line))))
+        path))))
+
+(defun crate-tree--json-from-nix (out)
+  "Return the parsed rustdoc JSON of the `nix-build' run that wrote OUT."
+  (when-let* ((path (crate-tree--nix-store-path out)))
+    (crate-tree--read-json (expand-file-name "tree.json" path))))
 
 (defun crate-tree--lib-target (package)
   "Return the library target of the `cargo metadata' PACKAGE.
@@ -931,6 +998,25 @@ that OUT holds above the reported cause."
         (format "`cargo doc' failed: %s (log in buffer `%s')" cause log)
       (format "`cargo doc' exited with an error (log in buffer `%s')" log))))
 
+(defconst crate-tree--nix-log-buffer "*crate-tree-nix-build*"
+  "Name of the buffer that keeps the output of a failed sandbox build.")
+
+(defun crate-tree--record (buffer key json reason)
+  "Print BUFFER, the tree of KEY, from JSON, and show REASON.
+A nil JSON caches the `:failed' sentinel, so a reprint never retries,
+and a nil REASON drops the stored one."
+  (puthash key (or json :failed) crate-tree--json-cache)
+  (if reason
+      (puthash key reason crate-tree--reason)
+    (remhash key crate-tree--reason))
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (derived-mode-p 'crate-tree-mode)
+        (setq crate-tree--status reason)
+        (crate-tree--apply-json (or json :failed))
+        (when reason
+          (message "crate-tree: %s" reason))))))
+
 (defun crate-tree--finish-build (process out buffer key manifest json-file)
   "Record the result of the build that PROCESS ran.
 OUT holds its output, BUFFER the tree, and KEY, MANIFEST and
@@ -949,25 +1035,130 @@ its cause in BUFFER, in place of the rows."
                                (abbreviate-file-name json-file))
                      (crate-tree--failure-reason out log)))))
     (remhash manifest crate-tree--in-flight)
-    (puthash key (or json :failed) crate-tree--json-cache)
-    (if reason
-        (puthash key reason crate-tree--reason)
-      (remhash key crate-tree--reason))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (when (derived-mode-p 'crate-tree-mode)
-          (setq crate-tree--status reason)
-          (crate-tree--apply-json (or json :failed))
-          (when reason
-            (message "crate-tree: %s" reason)))))
+    (crate-tree--record buffer key json reason)
     (when (and (buffer-live-p out) (null log))
       (kill-buffer out))))
+
+(defun crate-tree--start-cargo-build (directory buffer manifest program
+                                                json-file)
+  "Document the crate in DIRECTORY through `cargo doc', then reprint BUFFER.
+MANIFEST names the crate, PROGRAM runs the build, and JSON-FILE says
+where cargo writes the document."
+  (let ((key (crate-tree--json-cache-key directory))
+        (out (generate-new-buffer " *crate-tree-build*"))
+        (doc (file-name-nondirectory
+              (directory-file-name (file-name-directory manifest))))
+        (arguments (crate-tree--doc-arguments directory))
+        (environment (crate-tree--build-environment
+                      (crate-tree--target-directory directory))))
+    (condition-case nil
+        (progn
+          (let ((process-environment (append environment process-environment))
+                ;; `make-process' runs the child in the
+                ;; `default-directory' of the current buffer.
+                (default-directory
+                 (file-name-as-directory (expand-file-name directory))))
+            (make-process
+             :name (format "crate-tree-build-%s" doc)
+             :buffer out
+             :command (cons program arguments)
+             :noquery t
+             :sentinel
+             (lambda (process _event)
+               (when (memq (process-status process) '(exit signal))
+                 (crate-tree--finish-build process out buffer key
+                                           manifest json-file)))))
+          (puthash manifest t crate-tree--in-flight)
+          (crate-tree--set-status buffer 'running)
+          t)
+      (error
+       (when (buffer-live-p out)
+         (kill-buffer out))
+       (crate-tree--build-failed buffer key "the build cannot start")))))
+
+(defun crate-tree--finish-nix-build (process out buffer directory manifest
+                                             program json-file)
+  "Record the sandbox build that PROCESS ran, or retry through cargo.
+OUT holds its output, BUFFER the tree of the crate in DIRECTORY, and
+MANIFEST names that crate.  PROGRAM and JSON-FILE serve the retry.
+Sandbox inputs that no
+Nix expression names — a private registry, a system library, a
+crate without a lockfile and with dependencies — fail there and
+succeed through the local `cargo doc', so a failed sandbox build
+keeps OUT as `crate-tree--nix-log-buffer' and retries."
+  (let ((json (and (eq 0 (process-exit-status process))
+                   (crate-tree--json-from-nix out))))
+    (if json
+        (progn
+          (remhash manifest crate-tree--in-flight)
+          (crate-tree--record buffer (crate-tree--json-cache-key directory)
+                              json nil)
+          (when (buffer-live-p out)
+            (kill-buffer out)))
+      (when (buffer-live-p out)
+        (with-current-buffer out
+          (rename-buffer crate-tree--nix-log-buffer t)))
+      (crate-tree--start-cargo-build directory buffer manifest program
+                                     json-file))))
+
+(defun crate-tree--start-nix-build (directory buffer)
+  "Document the crate in DIRECTORY in the Nix sandbox, then reprint BUFFER.
+Return non-nil when a build runs, nil when Nix, the companion file or
+the `cargo metadata' answer cannot name the inputs, so the caller
+builds through `cargo doc' instead."
+  (when-let* ((nix (executable-find "nix-build"))
+              (nix-file (crate-tree--nix-path))
+              (manifest (crate-local--manifest directory))
+              (metadata (crate-local--metadata directory))
+              (package (crate-local--package metadata manifest))
+              (target (crate-tree--lib-target package))
+              (lib (gethash "name" target))
+              (root (crate-tree--workspace-root metadata directory))
+              (relative (file-relative-name manifest root))
+              ((not (string-prefix-p ".." relative))))
+    (let* ((key (crate-tree--json-cache-key directory))
+           (json-file (crate-tree--json-file
+                       metadata manifest
+                       (crate-tree--target-directory directory)))
+           (program (and crate-cargo-program
+                         (executable-find crate-cargo-program)))
+           (link (crate-tree--nix-root key))
+           (out (generate-new-buffer " *crate-tree-nix-build*")))
+      (condition-case nil
+          (progn
+            (make-directory (file-name-directory link) t)
+            (let ((default-directory
+                   (file-name-as-directory (expand-file-name directory))))
+              (make-process
+               :name (format "crate-tree-nix-%s" lib)
+               :buffer out
+               :command (list nix nix-file
+                              "--argstr" "crateDir" root
+                              "--argstr" "manifestPath" relative
+                              "--argstr" "libName" lib
+                              "-o" link)
+               :noquery t
+               :sentinel
+               (lambda (process _event)
+                 (when (memq (process-status process) '(exit signal))
+                   (crate-tree--finish-nix-build process out buffer directory
+                                                 manifest program
+                                                 json-file)))))
+            (puthash manifest t crate-tree--in-flight)
+            (crate-tree--set-status buffer 'running)
+            t)
+        (error
+         (when (buffer-live-p out)
+           (kill-buffer out))
+         nil)))))
 
 (defun crate-tree--start-local-build (directory buffer)
   "Document the crate in DIRECTORY, then reprint BUFFER.
 Return non-nil when a build runs, nil when no cargo, no manifest or
-no library target answers.  The failed start caches `:failed' and
-its reason, so the table can name the fix."
+no library target answers.  The sandbox build runs first when
+`crate-tree-nix-enable' holds, and the local `cargo doc' answers a
+failed sandbox build.  A failed start caches `:failed' and its
+reason, so the table can name the fix."
   (let* ((manifest (crate-local--manifest directory))
          (key (crate-tree--json-cache-key directory))
          (program (and crate-cargo-program
@@ -987,37 +1178,12 @@ its reason, so the table can name the fix."
        buffer key "`cargo metadata' cannot read the manifest"))
      ((null json-file)
       (crate-tree--build-failed buffer key "the package has no library target"))
+     ((and crate-tree-nix-enable
+           (crate-tree--start-nix-build directory buffer))
+      t)
      (t
-      (let ((out (generate-new-buffer " *crate-tree-build*"))
-            (doc (file-name-nondirectory
-                  (directory-file-name (file-name-directory manifest))))
-            (arguments (crate-tree--doc-arguments directory))
-            (environment (crate-tree--build-environment target)))
-        (condition-case nil
-            (progn
-              (let ((process-environment (append environment
-                                                 process-environment))
-                    ;; `make-process' runs the child in the
-                    ;; `default-directory' of the current buffer.
-                    (default-directory
-                     (file-name-as-directory (expand-file-name directory))))
-                (make-process
-                 :name (format "crate-tree-build-%s" doc)
-                 :buffer out
-                 :command (cons program arguments)
-                 :noquery t
-                 :sentinel
-                 (lambda (process _event)
-                   (when (memq (process-status process) '(exit signal))
-                     (crate-tree--finish-build process out buffer key
-                                               manifest json-file)))))
-              (puthash manifest t crate-tree--in-flight)
-              (crate-tree--set-status buffer 'running)
-              t)
-          (error
-           (when (buffer-live-p out)
-             (kill-buffer out))
-           (crate-tree--build-failed buffer key "the build cannot start"))))))))
+      (crate-tree--start-cargo-build directory buffer manifest program
+                                     json-file)))))
 
 (defun crate-tree--json (directory)
   "Return the rustdoc JSON of the crate in DIRECTORY, or nil.

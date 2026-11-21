@@ -57,6 +57,14 @@
           # parses the same document on every machine.
           harnessDoc = pkgs.callPackage ./nix/harness-doc.nix { };
 
+          # The same fixture crate through the local-crate derivation,
+          # so a broken `tree-doc.nix' fails the check.
+          treeDoc = pkgs.callPackage ./nix/tree-doc.nix {
+            crateDir = ./test/fixtures/harness;
+            manifestPath = "Cargo.toml";
+            libName = "harness";
+          };
+
           # Needs Xvfb, so it stays out of `checks'.
           screenshot = pkgs.callPackage ./nix/emacs-screenshot.nix {
             inherit crateEl testCratesDb;
@@ -82,6 +90,7 @@
             # The fixture JSON builds on its own, so a broken fixture
             # crate fails here before the suite ever reads it.
             harness-doc = harnessDoc;
+            tree-doc = treeDoc;
           };
 
           # Emacs plus the tools that the rustdoc path, the local-crate

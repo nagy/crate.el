@@ -190,16 +190,31 @@ a row.  An Embark file action on =lib.rs:12= opens the real =lib.rs=.
 =C-x r m= saves the view as a bookmark, and the jump restores the
 folds, the filters, the depth, the sort and the row at point.  A local
 crate runs =cargo doc= with JSON output, which needs =cargo=,
-=rustc= and the dependencies of the crate.  A database crate reads
+=rustc= and the dependencies of the crate.
+
+A local crate builds inside the Nix sandbox by default, through
+=tree-doc.nix=.  The sandbox blocks the network and writes nothing
+outside its build directory, and the Nix store caches a document whose
+source, lockfile and rustc version stay the same.  A sandbox build
+that fails, which happens for a private registry, a system library or
+a crate without a lockfile that holds dependencies, falls back to the
+local =cargo doc= and names that attempt in =*crate-tree-nix-build*.
+Both builds run =--frozen= when a lockfile exists and =--offline=
+otherwise, and both write their output to =crate-tree-target-directory=,
+a cache directory keyed by the manifest, the lockfile and the rustc
+version.  Set =crate-tree-nix-enable= to nil to skip the sandbox.
+
+A database crate reads
 the document from the Nix build that the detail buffer uses, so
 =M-x crate-tree= follows =crate-doc-enable=.
 
 A build that still runs reads =Rustdoc build in progress…=.  A build
 that cannot start names the fix in place of the rows: the =Modules=
 section reads =(rustdoc unavailable: REASON)= and the tree reads
-=No rustdoc JSON: REASON=.  =crate-doc-nix-file= names the
-=crate-doc.nix= file that =nix-build= runs, and the packaged build
-fills in the store path of its own copy.  =g= drops the cached answer
+=No rustdoc JSON: REASON=.  =crate-doc-nix-file= and
+=crate-tree-nix-file= name the Nix files that =nix-build= runs, and
+the packaged build fills in the store paths of its own copies.  =g=
+drops the cached answer
 and asks again, so a reader who fixes the reason retries from the
 table.
 
