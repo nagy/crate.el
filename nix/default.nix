@@ -26,6 +26,7 @@ let
 in
 melpaBuild {
   pname = "crate";
+  preferLocalBuild = true;
   inherit version;
   src = lib.cleanSource ./..;
 
