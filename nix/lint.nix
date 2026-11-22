@@ -1,6 +1,6 @@
 {
   pkgs ? import <nixpkgs> { },
-  runCommand ? pkgs.runCommand,
+  runCommandLocal ? pkgs.runCommandLocal,
   emacsPackages ? pkgs.emacs.pkgs,
   # Source tree to lint.  The flake passes the package's own `src`, so
   # the gate reads exactly the tree the build compiles.
@@ -11,7 +11,7 @@
 # checks the package metadata and the naming rules, checkdoc checks the
 # docstrings.  Test files live under `test/' and join the glob, so they
 # follow the same header and docstring rules as the code under test.
-runCommand "crate-lint"
+runCommandLocal "crate-lint"
   {
     nativeBuildInputs = [
       # `magit-section' joins the pack so package-lint can see that the
