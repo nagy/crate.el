@@ -19,6 +19,8 @@ pkgs.stdenv.mkDerivation {
   pname = "crate-test-harness-doc";
   version = "0.1.0";
 
+  preferLocalBuild = true;
+
   src = ./../test/fixtures/harness;
 
   nativeBuildInputs = [

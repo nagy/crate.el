@@ -71,6 +71,7 @@ let
     CARGO_NET_OFFLINE = "true";
 
     doCheck = false;
+    preferLocalBuild = true;
 
     installPhase = ''
       runHook preInstall

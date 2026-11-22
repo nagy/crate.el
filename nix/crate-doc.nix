@@ -58,7 +58,7 @@ let
   '';
 
   cargoLock =
-    pkgs.runCommand "crate-doc-lock-${crateName}"
+    pkgs.runCommandLocal "crate-doc-lock-${crateName}"
       {
         nativeBuildInputs = [ pkgs.cargo ];
         CARGO_HOME = cargoConfig;
@@ -71,7 +71,7 @@ let
         cp Cargo.lock $out
       '';
 
-  src = pkgs.runCommand "crate-doc-src-${crateName}" { } ''
+  src = pkgs.runCommandLocal "crate-doc-src-${crateName}" { } ''
     mkdir -p $out/src
     touch $out/src/lib.rs
     ln -s ${cargoToml} $out/Cargo.toml
@@ -95,5 +95,5 @@ crane.cargoDoc {
 
   RUSTC_BOOTSTRAP = "1";
 
-  preferLocalBuild = false;
+  preferLocalBuild = true;
 }
