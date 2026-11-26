@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+    # One formatter entry point for the repo: `nix fmt` formats every
+    # tracked file, and the module adds the `checks.treefmt' gate.
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     # Provides lib/git.nix with mkGitRepository, used to publish the
     # README screenshot as a git branch.
@@ -17,17 +23,22 @@
     inputs@{
       self,
       flake-parts,
+      treefmt-nix,
       nur-packages,
       ...
     }:
-    # Last commit date as YYYY-MM-DD, for the version string.
+    # Last commit date as YYYY-MM-DD, for the version string.  A plain path
+    # import carries no git metadata, so fall back to the epoch.
     let
-      lastModifiedDate = self.sourceInfo.lastModifiedDate;
+      sourceInfo = self.sourceInfo or { };
+      lastModifiedDate = sourceInfo.lastModifiedDate or "19700101000000";
       commitDate = "${builtins.substring 0 4 lastModifiedDate}-${
         builtins.substring 4 2 lastModifiedDate
       }-${builtins.substring 6 2 lastModifiedDate}";
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ treefmt-nix.flakeModule ];
+
       # Elisp is architecture-independent.
       systems = [
         "x86_64-linux"
@@ -111,7 +122,12 @@
             ];
           };
 
-          formatter = pkgs.nixfmt;
+          # treefmt-nix has no Elisp formatter, so this formats the flake
+          # and the Nix expressions under `nix/' that build the package.
+          treefmt = {
+            projectRootFile = "flake.nix";
+            programs.nixfmt.enable = true;
+          };
         };
     };
 }
